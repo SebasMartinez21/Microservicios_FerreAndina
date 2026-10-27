@@ -1,0 +1,305 @@
+openapi: 3.0.3
+info:
+  title: API de Reportes - FerreAndina S.A.S.
+  version: 1.0.0
+  description: |
+    Microservicio de Reportes: existencias, valorización, rotación y panel de indicadores
+    (RF11, RF14). Es un modelo de lectura: trabaja sobre una copia propia alimentada por eventos,
+    sin consultar a Inventario ni a Catálogo (RNF02).
+
+    **Acceso:** las peticiones externas llegan solo a través del API Gateway, que valida el JWT y aplica
+    roles. Todos los endpoints son solo para ADMIN, porque exponen costos y valorización del inventario.
+    Los operadores consultan el stock en Inventario.
+
+    **Eventos consumidos (RabbitMQ, exchange `ferreandina.events`):**
+    - `inventario.movimiento.registrado`: guarda el resumen del movimiento (el `movimientoId` es único, así un
+      evento repetido no se cuenta dos veces) y, por cada bodega afectada, actualiza las existencias con el
+      saldo resultante y el mínimo que trae el evento. Como el evento trae saldos y no variaciones, reprocesarlo
+      no daña las existencias. Contenido: `eventoId`, `movimientoId`, `tipo`, `producto` (id, código, nombre,
+      categoría y costo de referencia), `cantidad`, `fecha` y `afectaciones` (bodega, saldo y mínimo).
+    - `catalogo.producto.actualizado`: actualiza el producto, su costo de referencia y el valor de todas sus
+      existencias. No modifica el historial de movimientos, que es la foto de cada momento.
+
+    **Datos y límites:** los reportes reflejan el último evento procesado. Solo aparecen productos que han tenido
+    al menos un movimiento. Las bodegas se devuelven por id; la interfaz obtiene sus nombres de Inventario.
+    Si se renombra una categoría en Catálogo, los productos la actualizan cuando cambian o tienen movimientos.
+
+    **Definiciones:**
+    - `valor` = cantidad x costo de referencia.
+    - `quiebre` = producto con cantidad menor a su stock mínimo.
+    - `indiceRotacion` = unidades salidas en el periodo / stock promedio del periodo. Solo cuentan los
+      movimientos de tipo SALIDA (los traslados no son consumo). El stock promedio es el promedio de los
+      saldos registrados en el periodo. Los productos con existencias y sin salidas en el periodo se incluyen con
+      índice 0 (con su stock actual como stock promedio), para poder detectar la menor rotación.
+    - Rotación e indicadores no se almacenan: se calculan con consultas de agregación.
+
+    Este servicio no publica eventos ni llama a otros servicios.
+
+    **Convenciones:** rutas en español y en plural; listas paginadas con `pagina` y `limite`;
+    fechas en ISO 8601; errores con el esquema `Error`.
+servers:
+  - url: http://localhost:8000/api/reportes
+    description: A través del API Gateway (acceso externo)
+  - url: http://reportes-svc:3000
+    description: Interno en Kubernetes (solo entre servicios)
+tags:
+  - name: Reportes
+  - name: Indicadores
+  - name: Salud
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Salud]
+      summary: Estado del servicio (probes de Kubernetes)
+      security: []
+      responses:
+        '200':
+          description: Servicio activo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  estado: { type: string, example: ok }
+
+  /reportes/existencias:
+    get:
+      tags: [Reportes]
+      summary: Existencias actuales por producto y bodega (RF11)
+      description: Con `bajoMinimo=true` lista los quiebres de stock.
+      x-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/Pagina'
+        - $ref: '#/components/parameters/Limite'
+        - name: bodegaId
+          in: query
+          schema: { type: integer }
+        - name: categoria
+          in: query
+          description: Nombre de la categoría.
+          schema: { type: string }
+        - name: q
+          in: query
+          description: Texto a buscar en el nombre y el código del producto.
+          schema: { type: string }
+        - name: bajoMinimo
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Lista paginada de existencias
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginacion'
+                  - type: object
+                    properties:
+                      datos:
+                        type: array
+                        items: { $ref: '#/components/schemas/Existencia' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /reportes/valorizacion:
+    get:
+      tags: [Reportes]
+      summary: Valorización del inventario (RF11)
+      description: Agrupa el valor del inventario por bodega o por categoría.
+      x-roles: [ADMIN]
+      parameters:
+        - name: agruparPor
+          in: query
+          schema: { type: string, enum: [BODEGA, CATEGORIA], default: BODEGA }
+        - name: bodegaId
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Valorización total y por grupo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Valorizacion' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /reportes/rotacion:
+    get:
+      tags: [Reportes]
+      summary: Productos con mayor o menor rotación (RF11)
+      description: Por defecto calcula los últimos 30 días.
+      x-roles: [ADMIN]
+      parameters:
+        - name: desde
+          in: query
+          schema: { type: string, format: date }
+        - name: hasta
+          in: query
+          schema: { type: string, format: date }
+        - name: bodegaId
+          in: query
+          schema: { type: integer }
+        - name: orden
+          in: query
+          description: MAYOR lista los de mayor rotación; MENOR, los de menor.
+          schema: { type: string, enum: [MAYOR, MENOR], default: MAYOR }
+        - name: limite
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
+      responses:
+        '200':
+          description: Ranking de rotación
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Rotacion' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+  /indicadores:
+    get:
+      tags: [Indicadores]
+      summary: Panel de indicadores del inventario (RF14)
+      description: Valor total, quiebres de stock y rotación promedio, en total y por bodega.
+      x-roles: [ADMIN]
+      parameters:
+        - name: bodegaId
+          in: query
+          schema: { type: integer }
+        - name: dias
+          in: query
+          description: Días hacia atrás para calcular la rotación.
+          schema: { type: integer, minimum: 1, maximum: 365, default: 30 }
+      responses:
+        '200':
+          description: Indicadores del inventario
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Indicadores' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    Pagina:
+      name: pagina
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limite:
+      name: limite
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  responses:
+    DatosInvalidos:
+      description: Datos de entrada inválidos (por ejemplo, un rango de fechas incorrecto)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: Token ausente, inválido o vencido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    SinPermiso:
+      description: El rol del usuario no permite esta operación
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [codigo, mensaje]
+      properties:
+        codigo: { type: string, example: RANGO_FECHAS_INVALIDO }
+        mensaje: { type: string, example: La fecha inicial no puede ser posterior a la final. }
+        detalles:
+          type: array
+          items: { type: string }
+    Paginacion:
+      type: object
+      properties:
+        pagina: { type: integer, example: 1 }
+        limite: { type: integer, example: 20 }
+        total: { type: integer, example: 11400 }
+    ProductoResumen:
+      type: object
+      properties:
+        codigo: { type: string, example: TOR-HEX-014-2 }
+        nombre: { type: string }
+        categoria: { type: string, example: Tornillería }
+    Existencia:
+      type: object
+      properties:
+        productoId: { type: integer, example: 120 }
+        producto: { $ref: '#/components/schemas/ProductoResumen' }
+        bodegaId: { type: integer, example: 1 }
+        cantidad: { type: integer, example: 85 }
+        stockMinimo: { type: integer, example: 20 }
+        costoReferencia: { type: number, format: double, example: 280 }
+        valor: { type: number, format: double, example: 23800 }
+        actualizadoEn: { type: string, format: date-time }
+    GrupoValorizacion:
+      type: object
+      properties:
+        grupo:
+          type: string
+          description: Id de la bodega o nombre de la categoría, según `agruparPor`.
+          example: '1'
+        unidades: { type: integer, example: 5200 }
+        valor: { type: number, format: double, example: 18500000 }
+    Valorizacion:
+      type: object
+      properties:
+        agruparPor: { type: string, enum: [BODEGA, CATEGORIA] }
+        valorTotal: { type: number, format: double, example: 64200000 }
+        grupos:
+          type: array
+          items: { $ref: '#/components/schemas/GrupoValorizacion' }
+        actualizadoEn: { type: string, format: date-time, description: Último evento procesado }
+    ItemRotacion:
+      type: object
+      properties:
+        productoId: { type: integer, example: 120 }
+        producto: { $ref: '#/components/schemas/ProductoResumen' }
+        unidadesSalidas: { type: integer, example: 640 }
+        stockPromedio: { type: number, format: double, example: 90.5 }
+        indiceRotacion: { type: number, format: double, example: 7.07 }
+    Rotacion:
+      type: object
+      properties:
+        desde: { type: string, format: date }
+        hasta: { type: string, format: date }
+        orden: { type: string, enum: [MAYOR, MENOR] }
+        datos:
+          type: array
+          items: { $ref: '#/components/schemas/ItemRotacion' }
+    IndicadoresBodega:
+      type: object
+      properties:
+        bodegaId: { type: integer, example: 1 }
+        valor: { type: number, format: double }
+        productosEnQuiebre: { type: integer }
+    Indicadores:
+      type: object
+      properties:
+        valorTotal: { type: number, format: double, example: 64200000 }
+        totalUnidades: { type: integer, example: 15800 }
+        productosEnQuiebre: { type: integer, example: 23 }
+        rotacionPromedio: { type: number, format: double, example: 3.4 }
+        periodoRotacion:
+          type: object
+          properties:
+            desde: { type: string, format: date }
+            hasta: { type: string, format: date }
+        porBodega:
+          type: array
+          items: { $ref: '#/components/schemas/IndicadoresBodega' }
+        actualizadoEn: { type: string, format: date-time, description: Último evento procesado }

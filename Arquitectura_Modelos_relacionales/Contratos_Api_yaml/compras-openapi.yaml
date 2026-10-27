@@ -1,0 +1,549 @@
+openapi: 3.0.3
+info:
+  title: API de Compras - FerreAndina S.A.S.
+  version: 1.0.0
+  description: |
+    Microservicio de Compras: proveedores, órdenes de compra, recepción de mercancía y órdenes
+    sugeridas en borrador (RF03, RF06, RF16).
+
+    **Acceso:** las peticiones externas llegan solo a través del API Gateway, que valida el JWT y
+    aplica roles. Cada operación indica los roles permitidos en `x-roles`. Proveedores y órdenes
+    las gestiona ADMIN; OPERADOR consulta y registra recepciones de mercancía.
+
+    **Ciclo de vida de una orden:**
+    `BORRADOR` -> `ENVIADA` -> `RECIBIDA_PARCIAL` -> `RECIBIDA`. Una orden en `BORRADOR` o `ENVIADA`
+    sin recepciones puede pasar a `CANCELADA`. Solo una orden en `BORRADOR` se puede editar.
+    `origen` es `MANUAL` (creada por un usuario) o `SUGERIDA` (creada por el sistema desde el RF16).
+
+    **Relaciones directas (REST):**
+    - Compras llama a Catálogo para validar cada producto y obtener su proveedor y costo de referencia
+      (al crear o editar una orden, y al generar la orden sugerida). Si Catálogo no responde, devuelve 503.
+    - Compras llama a Inventario (`POST /movimientos`, tipo ENTRADA) por cada línea recibida. Si Inventario
+      no responde, la recepción no se confirma y devuelve 503.
+
+    **Eventos (RabbitMQ, exchange `ferreandina.events`):**
+    - Consume `inventario.reabastecimiento.requerido`. Crea una orden en `BORRADOR` con origen `SUGERIDA`:
+      proveedor principal del producto (consultado a Catálogo), cantidad sugerida, costo de referencia y
+      bodega destino. El campo `sugerenciaId` es único, así un evento repetido no crea otra orden. Si el
+      producto no tiene proveedor asociado, no se crea la orden y se registra el error en el log.
+    - Publica `compras.orden.sugerida` -> Notificaciones, al crear la orden sugerida.
+      Contenido: `eventoId`, `ordenId`, `numero`, `productoId`, `productoNombre`, `proveedorId`, `bodegaId` y `cantidad`.
+
+    **Referencias lógicas:** `productoId` apunta a Catálogo; `bodegaId` y `movimientoId` apuntan a
+    Inventario; `usuarioId` apunta al Gateway. No hay llaves foráneas entre servicios (RNF02).
+
+    **Convenciones:** rutas en español y en plural; listas paginadas con `pagina` y `limite`;
+    fechas en ISO 8601; errores con el esquema `Error`.
+servers:
+  - url: http://localhost:8000/api/compras
+    description: A través del API Gateway (acceso externo)
+  - url: http://compras-svc:3000
+    description: Interno en Kubernetes (solo entre servicios)
+tags:
+  - name: Proveedores
+  - name: Órdenes de compra
+  - name: Recepciones
+  - name: Salud
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Salud]
+      summary: Estado del servicio (probes de Kubernetes)
+      security: []
+      responses:
+        '200':
+          description: Servicio activo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  estado: { type: string, example: ok }
+
+  /proveedores:
+    get:
+      tags: [Proveedores]
+      summary: Listar proveedores (RF03)
+      description: Por defecto lista solo proveedores activos. `q` busca por coincidencia parcial en nombre y NIT.
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/Pagina'
+        - $ref: '#/components/parameters/Limite'
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: activo
+          in: query
+          schema: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Lista paginada de proveedores
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginacion'
+                  - type: object
+                    properties:
+                      datos:
+                        type: array
+                        items: { $ref: '#/components/schemas/Proveedor' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+    post:
+      tags: [Proveedores]
+      summary: Registrar un proveedor (RF03)
+      description: La asociación del proveedor con sus productos se hace en Catálogo (`/productos/{id}/proveedores`).
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProveedorInput' }
+      responses:
+        '201':
+          description: Proveedor creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proveedor' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '409':
+          description: Ya existe un proveedor con ese NIT
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /proveedores/{proveedorId}:
+    parameters:
+      - $ref: '#/components/parameters/ProveedorId'
+    get:
+      tags: [Proveedores]
+      summary: Consultar un proveedor (RF03)
+      x-roles: [ADMIN, OPERADOR]
+      responses:
+        '200':
+          description: Proveedor encontrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proveedor' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    put:
+      tags: [Proveedores]
+      summary: Actualizar un proveedor (RF03)
+      description: Con `activo` se puede reactivar un proveedor dado de baja.
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProveedorInput' }
+      responses:
+        '200':
+          description: Proveedor actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Proveedor' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+    delete:
+      tags: [Proveedores]
+      summary: Dar de baja un proveedor (baja lógica) (RF03)
+      description: No se permite si tiene órdenes en BORRADOR, ENVIADA o RECIBIDA_PARCIAL.
+      x-roles: [ADMIN]
+      responses:
+        '204': { description: Proveedor dado de baja }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /ordenes-compra:
+    get:
+      tags: [Órdenes de compra]
+      summary: Listar órdenes de compra (RF06)
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/Pagina'
+        - $ref: '#/components/parameters/Limite'
+        - name: estado
+          in: query
+          schema: { $ref: '#/components/schemas/EstadoOrden' }
+        - name: origen
+          in: query
+          schema: { $ref: '#/components/schemas/OrigenOrden' }
+        - name: proveedorId
+          in: query
+          schema: { type: integer }
+        - name: bodegaId
+          in: query
+          schema: { type: integer }
+        - name: desde
+          in: query
+          description: Fecha de creación desde.
+          schema: { type: string, format: date }
+        - name: hasta
+          in: query
+          description: Fecha de creación hasta.
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Lista paginada de órdenes, sin las líneas
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginacion'
+                  - type: object
+                    properties:
+                      datos:
+                        type: array
+                        items: { $ref: '#/components/schemas/OrdenCompraResumen' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+    post:
+      tags: [Órdenes de compra]
+      summary: Crear una orden de compra (RF06)
+      description: |
+        La orden nace en `BORRADOR` con origen `MANUAL`. El número se genera solo (por ejemplo OC-000123)
+        y el total se calcula a partir de las líneas. Si una línea no trae `costoUnitario`, se usa el costo
+        de referencia del producto en Catálogo. Valida que el proveedor y los productos existan y estén activos.
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrdenCompraInput' }
+      responses:
+        '201':
+          description: Orden creada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrdenCompra' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '503': { $ref: '#/components/responses/ServicioNoDisponible' }
+
+  /ordenes-compra/{ordenId}:
+    parameters:
+      - $ref: '#/components/parameters/OrdenId'
+    get:
+      tags: [Órdenes de compra]
+      summary: Consultar una orden con sus líneas (RF06)
+      description: Consultar una orden ya creada no depende de Catálogo, porque la línea guarda el nombre del producto.
+      x-roles: [ADMIN, OPERADOR]
+      responses:
+        '200':
+          description: Orden encontrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrdenCompra' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    put:
+      tags: [Órdenes de compra]
+      summary: Editar una orden en borrador (RF06)
+      description: Reemplaza proveedor, bodega, fecha esperada y líneas. Solo se permite en estado BORRADOR.
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrdenCompraInput' }
+      responses:
+        '200':
+          description: Orden actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrdenCompra' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: La orden no está en BORRADOR
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503': { $ref: '#/components/responses/ServicioNoDisponible' }
+
+  /ordenes-compra/{ordenId}/enviar:
+    post:
+      tags: [Órdenes de compra]
+      summary: Aprobar y enviar la orden al proveedor (RF06, RF16)
+      description: |
+        Pasa la orden de BORRADOR a ENVIADA. Es el paso de aprobación de las órdenes sugeridas:
+        el sistema nunca las envía solo.
+      x-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/OrdenId'
+      responses:
+        '200':
+          description: Orden enviada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrdenCompra' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: La orden no está en BORRADOR
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /ordenes-compra/{ordenId}/cancelar:
+    post:
+      tags: [Órdenes de compra]
+      summary: Cancelar una orden (RF06)
+      description: Solo se permite en BORRADOR o ENVIADA, y mientras no tenga recepciones.
+      x-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/OrdenId'
+      responses:
+        '200':
+          description: Orden cancelada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrdenCompra' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: La orden ya tiene recepciones o no está en BORRADOR o ENVIADA
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /ordenes-compra/{ordenId}/recepciones:
+    parameters:
+      - $ref: '#/components/parameters/OrdenId'
+    get:
+      tags: [Recepciones]
+      summary: Listar las recepciones de una orden (RF06)
+      x-roles: [ADMIN, OPERADOR]
+      responses:
+        '200':
+          description: Recepciones de la orden
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Recepcion' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    post:
+      tags: [Recepciones]
+      summary: Recibir mercancía contra una orden (RF06)
+      description: |
+        Se permite en estado ENVIADA o RECIBIDA_PARCIAL. Cada línea no puede superar la cantidad pendiente
+        (pedida menos recibida). Por cada línea, Compras registra una ENTRADA en Inventario con la bodega de
+        la orden y la referencia de la orden. Luego actualiza `cantidadRecibida`, y la orden pasa a
+        RECIBIDA_PARCIAL o a RECIBIDA cuando todas las líneas quedan completas.
+
+        Idempotencia: Compras envía a Inventario una `Idempotency-Key` determinista (orden, línea,
+        cantidad recibida previa y cantidad), de modo que un reintento tras un fallo no duplica las
+        entradas ya registradas. Si Inventario falla en alguna línea, la recepción no se confirma
+        y se puede repetir la petición.
+      x-roles: [ADMIN, OPERADOR]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecepcionInput' }
+      responses:
+        '201':
+          description: Recepción registrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Recepcion' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: La orden no admite recepciones, o una línea supera la cantidad pendiente
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503': { $ref: '#/components/responses/ServicioNoDisponible' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    ProveedorId:
+      name: proveedorId
+      in: path
+      required: true
+      schema: { type: integer }
+    OrdenId:
+      name: ordenId
+      in: path
+      required: true
+      schema: { type: integer }
+    Pagina:
+      name: pagina
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limite:
+      name: limite
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  responses:
+    DatosInvalidos:
+      description: Datos de entrada inválidos (incluye proveedores, productos o bodegas que no existen o están inactivos)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: Token ausente, inválido o vencido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    SinPermiso:
+      description: El rol del usuario no permite esta operación
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoEncontrado:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflicto:
+      description: Conflicto con el estado actual del recurso
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ServicioNoDisponible:
+      description: Catálogo o Inventario no están disponibles
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [codigo, mensaje]
+      properties:
+        codigo: { type: string, example: CANTIDAD_EXCEDE_PENDIENTE }
+        mensaje: { type: string, example: La cantidad recibida supera la pendiente de la línea. }
+        detalles:
+          type: array
+          items: { type: string }
+    Paginacion:
+      type: object
+      properties:
+        pagina: { type: integer, example: 1 }
+        limite: { type: integer, example: 20 }
+        total: { type: integer, example: 60 }
+    Proveedor:
+      allOf:
+        - $ref: '#/components/schemas/ProveedorInput'
+        - type: object
+          properties:
+            id: { type: integer, example: 12 }
+    ProveedorInput:
+      type: object
+      required: [nit, nombre]
+      properties:
+        nit: { type: string, example: 900123456-7 }
+        nombre: { type: string, example: Distribuidora Andina de Tornillos S.A.S. }
+        contacto: { type: string, example: Carlos Ríos }
+        email: { type: string, format: email }
+        telefono: { type: string, example: 3101234567 }
+        activo: { type: boolean, default: true }
+    EstadoOrden:
+      type: string
+      enum: [BORRADOR, ENVIADA, RECIBIDA_PARCIAL, RECIBIDA, CANCELADA]
+    OrigenOrden:
+      type: string
+      enum: [MANUAL, SUGERIDA]
+    LineaOrden:
+      type: object
+      properties:
+        id: { type: integer, example: 301 }
+        productoId: { type: integer, example: 120 }
+        productoNombre: { type: string, description: Copia del nombre al crear la orden }
+        cantidad: { type: integer, example: 200 }
+        cantidadRecibida: { type: integer, example: 0 }
+        costoUnitario: { type: number, format: double, example: 280 }
+    LineaOrdenInput:
+      type: object
+      required: [productoId, cantidad]
+      properties:
+        productoId: { type: integer, example: 120 }
+        cantidad: { type: integer, minimum: 1, example: 200 }
+        costoUnitario:
+          type: number
+          format: double
+          minimum: 0
+          description: Si se omite, se usa el costo de referencia del producto.
+    OrdenCompraInput:
+      type: object
+      required: [proveedorId, bodegaId, lineas]
+      properties:
+        proveedorId: { type: integer, example: 12 }
+        bodegaId: { type: integer, description: Bodega de Inventario que recibe la mercancía, example: 1 }
+        fechaEsperada: { type: string, format: date }
+        lineas:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/LineaOrdenInput' }
+    OrdenCompraResumen:
+      type: object
+      properties:
+        id: { type: integer, example: 45 }
+        numero: { type: string, example: OC-000045 }
+        proveedor:
+          type: object
+          properties:
+            id: { type: integer, example: 12 }
+            nombre: { type: string }
+        bodegaId: { type: integer, example: 1 }
+        usuarioId: { type: integer, nullable: true, description: Vacío en las órdenes sugeridas por el sistema }
+        estado: { $ref: '#/components/schemas/EstadoOrden' }
+        origen: { $ref: '#/components/schemas/OrigenOrden' }
+        sugerenciaId: { type: integer, nullable: true, description: Sugerencia de Inventario que originó la orden (RF16) }
+        creadaEn: { type: string, format: date-time }
+        fechaEsperada: { type: string, format: date, nullable: true }
+        total: { type: number, format: double, example: 56000 }
+    OrdenCompra:
+      allOf:
+        - $ref: '#/components/schemas/OrdenCompraResumen'
+        - type: object
+          properties:
+            lineas:
+              type: array
+              items: { $ref: '#/components/schemas/LineaOrden' }
+    RecepcionInput:
+      type: object
+      required: [lineas]
+      properties:
+        observaciones: { type: string }
+        lineas:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [detalleOrdenId, cantidad]
+            properties:
+              detalleOrdenId: { type: integer, description: Id de la línea de la orden, example: 301 }
+              cantidad: { type: integer, minimum: 1, example: 120 }
+    Recepcion:
+      type: object
+      properties:
+        id: { type: integer, example: 8 }
+        ordenId: { type: integer, example: 45 }
+        usuarioId: { type: integer }
+        recibidaEn: { type: string, format: date-time }
+        observaciones: { type: string }
+        lineas:
+          type: array
+          items:
+            type: object
+            properties:
+              detalleOrdenId: { type: integer }
+              productoId: { type: integer }
+              cantidad: { type: integer }
+              movimientoId: { type: integer, description: Entrada generada en Inventario }

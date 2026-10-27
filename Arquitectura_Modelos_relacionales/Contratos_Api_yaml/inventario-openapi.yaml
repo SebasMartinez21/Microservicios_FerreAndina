@@ -1,0 +1,662 @@
+openapi: 3.0.3
+info:
+  title: API de Inventario - FerreAndina S.A.S.
+  version: 1.0.0
+  description: |
+    Microservicio de Inventario: bodegas, stock por bodega, movimientos, kardex,
+    devoluciones y sugerencias de reabastecimiento (RF04, RF05, RF10, RF13, RF15, RF16).
+
+    **Acceso:** las peticiones externas llegan solo a través del API Gateway, que valida el JWT
+    y aplica roles. Cada operación indica los roles permitidos en `x-roles`.
+
+    **Eventos publicados (RabbitMQ, exchange `ferreandina.events`):**
+    - `inventario.stock.bajo` -> Notificaciones (incluye la sugerencia de traslado si existe)
+    - `inventario.movimiento.registrado` -> Reportes (incluye los datos del producto y el saldo y mínimo de cada bodega afectada)
+    - `inventario.reabastecimiento.requerido` -> Compras
+
+    Este servicio no consume eventos.
+
+    **Relaciones directas (REST):**
+    - Inventario llama a Catálogo para validar el producto y traer sus datos; si Catálogo no responde, devuelve 503.
+    - Compras llama a `POST /movimientos` (tipo ENTRADA) al recibir mercancía, con `Idempotency-Key` para que un reintento no duplique la entrada.
+
+    **Convenciones:** rutas en español y en plural; listas paginadas con `pagina` y `limite`;
+    fechas en ISO 8601; errores con el esquema `Error`.
+servers:
+  - url: http://localhost:8000/api/inventario
+    description: A través del API Gateway (acceso externo)
+  - url: http://inventario-svc:3000
+    description: Interno en Kubernetes (solo entre servicios)
+tags:
+  - name: Bodegas
+  - name: Stock
+  - name: Movimientos
+  - name: Kardex
+  - name: Devoluciones
+  - name: Reabastecimiento
+  - name: Salud
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Salud]
+      summary: Estado del servicio (probes de Kubernetes)
+      security: []
+      responses:
+        '200':
+          description: Servicio activo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  estado: { type: string, example: ok }
+
+  /bodegas:
+    get:
+      tags: [Bodegas]
+      summary: Listar bodegas
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/Pagina'
+        - $ref: '#/components/parameters/Limite'
+        - name: activa
+          in: query
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Lista paginada de bodegas
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginacion'
+                  - type: object
+                    properties:
+                      datos:
+                        type: array
+                        items: { $ref: '#/components/schemas/Bodega' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+    post:
+      tags: [Bodegas]
+      summary: Crear bodega
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BodegaInput' }
+      responses:
+        '201':
+          description: Bodega creada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Bodega' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /bodegas/{bodegaId}:
+    parameters:
+      - $ref: '#/components/parameters/BodegaId'
+    get:
+      tags: [Bodegas]
+      summary: Consultar una bodega
+      x-roles: [ADMIN, OPERADOR]
+      responses:
+        '200':
+          description: Bodega encontrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Bodega' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    put:
+      tags: [Bodegas]
+      summary: Actualizar bodega
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BodegaInput' }
+      responses:
+        '200':
+          description: Bodega actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Bodega' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    delete:
+      tags: [Bodegas]
+      summary: Dar de baja una bodega (baja lógica)
+      description: No se permite si la bodega aún tiene stock mayor a cero.
+      x-roles: [ADMIN]
+      responses:
+        '204': { description: Bodega dada de baja }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /bodegas/{bodegaId}/stock:
+    get:
+      tags: [Stock]
+      summary: Stock de todos los productos de una bodega
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/BodegaId'
+        - $ref: '#/components/parameters/Pagina'
+        - $ref: '#/components/parameters/Limite'
+        - name: bajoMinimo
+          in: query
+          description: Si es true, solo productos por debajo de su mínimo.
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Lista paginada de stock
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginacion'
+                  - type: object
+                    properties:
+                      datos:
+                        type: array
+                        items: { $ref: '#/components/schemas/Stock' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /bodegas/{bodegaId}/stock/{productoId}/minimo:
+    put:
+      tags: [Stock]
+      summary: Configurar el stock mínimo de un producto en una bodega (RF09)
+      x-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/BodegaId'
+        - $ref: '#/components/parameters/ProductoId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stockMinimo]
+              properties:
+                stockMinimo: { type: integer, minimum: 0, example: 20 }
+      responses:
+        '200':
+          description: Mínimo actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Stock' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /stock/{productoId}:
+    get:
+      tags: [Stock]
+      summary: Stock de un producto en cada bodega (RF05, RF15)
+      description: Consulta más frecuente del sistema; también la usará el canal en línea.
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/ProductoId'
+      responses:
+        '200':
+          description: Stock por bodega y total
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  productoId: { type: integer, example: 120 }
+                  total: { type: integer, example: 340 }
+                  bodegas:
+                    type: array
+                    items: { $ref: '#/components/schemas/Stock' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /movimientos:
+    get:
+      tags: [Movimientos]
+      summary: Listar movimientos con filtros
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/Pagina'
+        - $ref: '#/components/parameters/Limite'
+        - name: productoId
+          in: query
+          schema: { type: integer }
+        - name: bodegaId
+          in: query
+          schema: { type: integer }
+        - name: tipo
+          in: query
+          schema: { $ref: '#/components/schemas/TipoMovimiento' }
+        - name: desde
+          in: query
+          schema: { type: string, format: date }
+        - name: hasta
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Lista paginada de movimientos
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginacion'
+                  - type: object
+                    properties:
+                      datos:
+                        type: array
+                        items: { $ref: '#/components/schemas/Movimiento' }
+    post:
+      tags: [Movimientos]
+      summary: Registrar un movimiento (entrada, salida, ajuste o traslado)
+      description: |
+        Actualiza el saldo y registra el kardex en una sola transacción.
+        - ENTRADA: requiere `bodegaDestinoId`.
+        - SALIDA: requiere `bodegaOrigenId`.
+        - AJUSTE: requiere `bodegaOrigenId`; la cantidad puede ser negativa.
+        - TRASLADO: requiere ambas bodegas, que deben ser distintas.
+        Si el saldo queda bajo el mínimo, publica `inventario.stock.bajo`.
+        Idempotencia: si se envía `Idempotency-Key` y la clave ya fue usada, no se crea otro
+        movimiento; se devuelve el original con código 200.
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: Clave única por operación. Si se repite, se devuelve el movimiento original sin crear otro.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovimientoInput' }
+            example:
+              tipo: TRASLADO
+              productoId: 120
+              cantidad: 25
+              bodegaOrigenId: 1
+              bodegaDestinoId: 2
+              motivo: Reposición sede Pereira
+      responses:
+        '200':
+          description: Movimiento ya registrado con esa Idempotency-Key (no se creó otro)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Movimiento' }
+        '201':
+          description: Movimiento registrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Movimiento' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: Stock insuficiente para la operación
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: Catálogo no disponible para validar el producto
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /movimientos/{movimientoId}:
+    get:
+      tags: [Movimientos]
+      summary: Consultar un movimiento
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - name: movimientoId
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Movimiento encontrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Movimiento' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /kardex:
+    get:
+      tags: [Kardex]
+      summary: Kardex de un producto (RF10)
+      description: Historial ordenado por fecha con entradas, salidas y saldo acumulado.
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - name: productoId
+          in: query
+          required: true
+          schema: { type: integer }
+        - name: bodegaId
+          in: query
+          schema: { type: integer }
+        - name: desde
+          in: query
+          schema: { type: string, format: date }
+        - name: hasta
+          in: query
+          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/Pagina'
+        - $ref: '#/components/parameters/Limite'
+      responses:
+        '200':
+          description: Líneas del kardex
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginacion'
+                  - type: object
+                    properties:
+                      datos:
+                        type: array
+                        items: { $ref: '#/components/schemas/LineaKardex' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+
+  /devoluciones:
+    get:
+      tags: [Devoluciones]
+      summary: Listar devoluciones
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/Pagina'
+        - $ref: '#/components/parameters/Limite'
+        - name: tipo
+          in: query
+          schema: { $ref: '#/components/schemas/TipoDevolucion' }
+      responses:
+        '200':
+          description: Lista paginada de devoluciones
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginacion'
+                  - type: object
+                    properties:
+                      datos:
+                        type: array
+                        items: { $ref: '#/components/schemas/Devolucion' }
+    post:
+      tags: [Devoluciones]
+      summary: Registrar una devolución (RF13)
+      description: |
+        CLIENTE: el producto entra a la bodega. PROVEEDOR: el producto sale de la bodega.
+        Genera automáticamente el movimiento de stock asociado.
+      x-roles: [ADMIN, OPERADOR]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DevolucionInput' }
+      responses:
+        '201':
+          description: Devolución registrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Devolucion' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: Stock insuficiente para devolver al proveedor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /sugerencias-reabastecimiento:
+    get:
+      tags: [Reabastecimiento]
+      summary: Listar sugerencias de reabastecimiento (RF16)
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/Pagina'
+        - $ref: '#/components/parameters/Limite'
+        - name: estado
+          in: query
+          schema: { $ref: '#/components/schemas/EstadoSugerencia' }
+      responses:
+        '200':
+          description: Lista paginada de sugerencias
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginacion'
+                  - type: object
+                    properties:
+                      datos:
+                        type: array
+                        items: { $ref: '#/components/schemas/Sugerencia' }
+
+  /sugerencias-reabastecimiento/{sugerenciaId}/aceptar:
+    post:
+      tags: [Reabastecimiento]
+      summary: Aceptar una sugerencia de traslado
+      description: |
+        Crea el movimiento de traslado sugerido. Las sugerencias de tipo COMPRA las atiende
+        el servicio de Compras, que genera la orden en borrador.
+      x-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/SugerenciaId'
+      responses:
+        '200':
+          description: Sugerencia aceptada y traslado registrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Movimiento' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /sugerencias-reabastecimiento/{sugerenciaId}/rechazar:
+    post:
+      tags: [Reabastecimiento]
+      summary: Rechazar una sugerencia
+      x-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/SugerenciaId'
+      responses:
+        '200':
+          description: Sugerencia rechazada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sugerencia' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    BodegaId:
+      name: bodegaId
+      in: path
+      required: true
+      schema: { type: integer }
+    ProductoId:
+      name: productoId
+      in: path
+      required: true
+      description: Identificador del producto en el servicio de Catálogo.
+      schema: { type: integer }
+    SugerenciaId:
+      name: sugerenciaId
+      in: path
+      required: true
+      schema: { type: integer }
+    Pagina:
+      name: pagina
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limite:
+      name: limite
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  responses:
+    DatosInvalidos:
+      description: Datos de entrada inválidos
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: Token ausente, inválido o vencido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    SinPermiso:
+      description: El rol del usuario no permite esta operación
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoEncontrado:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflicto:
+      description: Conflicto con el estado actual del recurso
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [codigo, mensaje]
+      properties:
+        codigo: { type: string, example: STOCK_INSUFICIENTE }
+        mensaje: { type: string, example: La bodega no tiene stock suficiente. }
+        detalles:
+          type: array
+          items: { type: string }
+    Paginacion:
+      type: object
+      properties:
+        pagina: { type: integer, example: 1 }
+        limite: { type: integer, example: 20 }
+        total: { type: integer, example: 143 }
+    Bodega:
+      allOf:
+        - $ref: '#/components/schemas/BodegaInput'
+        - type: object
+          properties:
+            id: { type: integer, example: 1 }
+            activa: { type: boolean, example: true }
+    BodegaInput:
+      type: object
+      required: [codigo, nombre, ciudad]
+      properties:
+        codigo: { type: string, example: MZL-01 }
+        nombre: { type: string, example: Bodega principal }
+        ciudad: { type: string, example: Manizales }
+        direccion: { type: string, example: 'Carrera 23 #45-10' }
+    Stock:
+      type: object
+      properties:
+        productoId: { type: integer, example: 120 }
+        bodegaId: { type: integer, example: 1 }
+        cantidad: { type: integer, example: 85 }
+        stockMinimo: { type: integer, example: 20 }
+    TipoMovimiento:
+      type: string
+      enum: [ENTRADA, SALIDA, AJUSTE, TRASLADO]
+    MovimientoInput:
+      type: object
+      required: [tipo, productoId, cantidad]
+      properties:
+        tipo: { $ref: '#/components/schemas/TipoMovimiento' }
+        productoId: { type: integer, example: 120 }
+        cantidad:
+          type: integer
+          description: Mayor a cero; solo en AJUSTE puede ser negativa.
+          example: 25
+        bodegaOrigenId: { type: integer, nullable: true }
+        bodegaDestinoId: { type: integer, nullable: true }
+        motivo: { type: string }
+        referencia:
+          type: object
+          nullable: true
+          description: Documento asociado, por ejemplo una orden de compra recibida.
+          properties:
+            tipo: { type: string, enum: [ORDEN_COMPRA, DEVOLUCION, SUGERENCIA] }
+            id: { type: integer }
+    Movimiento:
+      allOf:
+        - $ref: '#/components/schemas/MovimientoInput'
+        - type: object
+          properties:
+            id: { type: integer, example: 5021 }
+            usuarioId: { type: integer, description: Usuario que lo registró }
+            fecha: { type: string, format: date-time }
+            saldoOrigen: { type: integer, nullable: true, description: Saldo de la bodega de origen tras el movimiento }
+            saldoDestino: { type: integer, nullable: true, description: Saldo de la bodega de destino tras el movimiento }
+    LineaKardex:
+      type: object
+      properties:
+        movimientoId: { type: integer }
+        fecha: { type: string, format: date-time }
+        tipo: { $ref: '#/components/schemas/TipoMovimiento' }
+        bodegaId: { type: integer }
+        entrada: { type: integer, example: 0 }
+        salida: { type: integer, example: 25 }
+        saldo: { type: integer, example: 60 }
+        usuarioId: { type: integer }
+    TipoDevolucion:
+      type: string
+      enum: [CLIENTE, PROVEEDOR]
+    DevolucionInput:
+      type: object
+      required: [tipo, productoId, bodegaId, cantidad, motivo]
+      properties:
+        tipo: { $ref: '#/components/schemas/TipoDevolucion' }
+        productoId: { type: integer }
+        bodegaId: { type: integer }
+        cantidad: { type: integer, minimum: 1 }
+        motivo: { type: string, example: Producto defectuoso }
+        referencia:
+          type: string
+          description: Factura, remisión u orden de compra de origen.
+    Devolucion:
+      allOf:
+        - $ref: '#/components/schemas/DevolucionInput'
+        - type: object
+          properties:
+            id: { type: integer }
+            movimientoId: { type: integer, description: Movimiento de stock generado }
+            usuarioId: { type: integer }
+            fecha: { type: string, format: date-time }
+    EstadoSugerencia:
+      type: string
+      enum: [PENDIENTE, ACEPTADA, RECHAZADA]
+    Sugerencia:
+      type: object
+      properties:
+        id: { type: integer }
+        tipo: { type: string, enum: [TRASLADO, COMPRA] }
+        productoId: { type: integer }
+        bodegaDestinoId: { type: integer }
+        bodegaOrigenId:
+          type: integer
+          nullable: true
+          description: Solo en sugerencias de tipo TRASLADO.
+        cantidad: { type: integer }
+        estado: { $ref: '#/components/schemas/EstadoSugerencia' }
+        movimientoId: { type: integer, nullable: true, description: Traslado generado al aceptar la sugerencia }
+        creadaEn: { type: string, format: date-time }

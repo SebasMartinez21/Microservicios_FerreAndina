@@ -1,0 +1,596 @@
+openapi: 3.0.3
+info:
+  title: API del Gateway - FerreAndina S.A.S.
+  version: 1.0.0
+  description: |
+    API Gateway propio: único punto de entrada al sistema (RNF09). Atiende directamente la
+    autenticación y la gestión de usuarios y roles (RF07, RF08) y enruta el resto de las
+    peticiones a los microservicios. No usa Kong ni gateways de terceros.
+
+    **Rutas que enruta (proxy):**
+
+    | Prefijo | Servicio | Destino interno |
+    |---|---|---|
+    | `/api/catalogo` | Catálogo | `http://catalogo-svc:3000` |
+    | `/api/compras` | Compras | `http://compras-svc:3000` |
+    | `/api/inventario` | Inventario | `http://inventario-svc:3000` |
+    | `/api/notificaciones` | Notificaciones | `http://notificaciones-svc:3000` |
+    | `/api/reportes` | Reportes | `http://reportes-svc:3000` |
+
+    **Qué hace con cada petición protegida:**
+    1. Verifica la firma y el vencimiento del JWT.
+    2. Rechaza el token si su `jti` está en la lista de tokens revocados (sesión cerrada).
+    3. Comprueba que el rol del usuario esté permitido en la ruta (`x-roles` de cada contrato).
+    4. Reenvía la petición al servicio con las cabeceras `X-Usuario-Id`, `X-Usuario-Email` y
+       `X-Usuario-Rol`. Los servicios confían en ellas porque solo el Gateway es alcanzable
+       desde fuera del clúster.
+
+    **Contenido del JWT:** `sub` (id del usuario), `email`, `rol` (ADMIN u OPERADOR), `jti`,
+    `iat` y `exp`.
+
+    **Errores propios del Gateway al enrutar:** 401 (token ausente, inválido, vencido o
+    revocado), 403 (rol no permitido), 503 (servicio destino no disponible) y 504 (el
+    servicio destino no respondió a tiempo).
+
+    **Convenciones:** rutas en español y en plural; listas paginadas con `pagina` y `limite`;
+    fechas en ISO 8601; errores con el esquema `Error`. Este servicio no publica ni consume eventos.
+servers:
+  - url: http://localhost:8000/api
+    description: API Gateway (acceso externo)
+tags:
+  - name: Autenticación
+  - name: Usuarios
+  - name: Roles
+  - name: Salud
+security:
+  - bearerAuth: []
+
+x-rutas:
+  - prefijo: /api/catalogo
+    destino: http://catalogo-svc:3000
+  - prefijo: /api/compras
+    destino: http://compras-svc:3000
+  - prefijo: /api/inventario
+    destino: http://inventario-svc:3000
+  - prefijo: /api/notificaciones
+    destino: http://notificaciones-svc:3000
+  - prefijo: /api/reportes
+    destino: http://reportes-svc:3000
+
+paths:
+  /health:
+    get:
+      tags: [Salud]
+      summary: Estado del Gateway (probes de Kubernetes)
+      security: []
+      responses:
+        '200':
+          description: Gateway activo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  estado:
+                    type: string
+                    example: ok
+
+  /auth/login:
+    post:
+      tags: [Autenticación]
+      summary: Iniciar sesión (RF08)
+      description: Público. Devuelve un JWT que se envía en `Authorization Bearer` en las demás peticiones.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Sesión iniciada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/DatosInvalidos'
+        '401':
+          description: Credenciales incorrectas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: El usuario está desactivado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/logout:
+    post:
+      tags: [Autenticación]
+      summary: Cerrar sesión (RF08)
+      description: Revoca el JWT actual guardando su `jti` hasta que venza.
+      x-roles: [ADMIN, OPERADOR]
+      responses:
+        '204':
+          description: Sesión cerrada
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+
+  /auth/perfil:
+    get:
+      tags: [Autenticación]
+      summary: Datos del usuario autenticado
+      x-roles: [ADMIN, OPERADOR]
+      responses:
+        '200':
+          description: Perfil del usuario del token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Usuario'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+
+  /auth/recuperar:
+    post:
+      tags: [Autenticación]
+      summary: Solicitar recuperación de contraseña (RF08)
+      description: |
+        Público. Si el correo existe, envía un enlace con un token de un solo uso y con vencimiento.
+        Siempre responde 202, exista o no el correo, para no revelar qué cuentas están registradas.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecuperarRequest'
+      responses:
+        '202':
+          description: Solicitud recibida
+        '400':
+          $ref: '#/components/responses/DatosInvalidos'
+
+  /auth/restablecer:
+    post:
+      tags: [Autenticación]
+      summary: Restablecer la contraseña con el token recibido por correo (RF08)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestablecerRequest'
+      responses:
+        '204':
+          description: Contraseña actualizada
+        '400':
+          description: Datos inválidos, o token inválido, vencido o ya usado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/cambiar-password:
+    post:
+      tags: [Autenticación]
+      summary: Cambiar la contraseña del usuario autenticado (RF08)
+      x-roles: [ADMIN, OPERADOR]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CambiarPasswordRequest'
+      responses:
+        '204':
+          description: Contraseña actualizada
+        '400':
+          description: Datos inválidos o contraseña actual incorrecta
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+
+  /usuarios:
+    get:
+      tags: [Usuarios]
+      summary: Listar usuarios (RF07)
+      x-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/Pagina'
+        - $ref: '#/components/parameters/Limite'
+        - name: q
+          in: query
+          description: Búsqueda por nombre o correo.
+          schema:
+            type: string
+        - name: rolId
+          in: query
+          schema:
+            type: integer
+        - name: activo
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Lista paginada de usuarios
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginacion'
+                  - type: object
+                    properties:
+                      datos:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Usuario'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+    post:
+      tags: [Usuarios]
+      summary: Registrar un usuario (RF07)
+      description: El registro lo hace un administrador; no hay registro público.
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsuarioCrear'
+      responses:
+        '201':
+          description: Usuario creado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Usuario'
+        '400':
+          $ref: '#/components/responses/DatosInvalidos'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+        '409':
+          description: Ya existe un usuario con ese correo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /usuarios/{usuarioId}:
+    parameters:
+      - $ref: '#/components/parameters/UsuarioId'
+    get:
+      tags: [Usuarios]
+      summary: Consultar un usuario (RF07)
+      x-roles: [ADMIN]
+      responses:
+        '200':
+          description: Usuario encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Usuario'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+    put:
+      tags: [Usuarios]
+      summary: Actualizar un usuario (RF07)
+      description: Permite cambiar nombre y correo, y reactivar o desactivar la cuenta con `activo`.
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsuarioActualizar'
+      responses:
+        '200':
+          description: Usuario actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Usuario'
+        '400':
+          $ref: '#/components/responses/DatosInvalidos'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+        '409':
+          $ref: '#/components/responses/Conflicto'
+    delete:
+      tags: [Usuarios]
+      summary: Desactivar un usuario (baja lógica)
+      description: |
+        No borra el registro, para conservar el historial de movimientos hechos por el usuario.
+        Un administrador no puede desactivarse a sí mismo.
+      x-roles: [ADMIN]
+      responses:
+        '204':
+          description: Usuario desactivado
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+        '409':
+          $ref: '#/components/responses/Conflicto'
+
+  /usuarios/{usuarioId}/rol:
+    put:
+      tags: [Usuarios]
+      summary: Asignar un rol a un usuario (RF07)
+      description: Un administrador no puede quitarse a sí mismo el rol ADMIN.
+      x-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/UsuarioId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rolId]
+              properties:
+                rolId:
+                  type: integer
+                  example: 2
+      responses:
+        '200':
+          description: Rol asignado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Usuario'
+        '400':
+          $ref: '#/components/responses/DatosInvalidos'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+        '409':
+          $ref: '#/components/responses/Conflicto'
+
+  /roles:
+    get:
+      tags: [Roles]
+      summary: Listar los roles disponibles (RF07)
+      x-roles: [ADMIN]
+      responses:
+        '200':
+          description: Roles del sistema
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Rol'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    UsuarioId:
+      name: usuarioId
+      in: path
+      required: true
+      schema:
+        type: integer
+    Pagina:
+      name: pagina
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Limite:
+      name: limite
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+  responses:
+    DatosInvalidos:
+      description: Datos de entrada inválidos
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NoAutenticado:
+      description: Token ausente, inválido, vencido o revocado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    SinPermiso:
+      description: El rol del usuario no permite esta operación
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NoEncontrado:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflicto:
+      description: Conflicto con el estado actual del recurso
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ServicioNoDisponible:
+      description: El servicio destino no está disponible (error del proxy)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TiempoAgotado:
+      description: El servicio destino no respondió a tiempo (error del proxy)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      required: [codigo, mensaje]
+      properties:
+        codigo:
+          type: string
+          example: CREDENCIALES_INVALIDAS
+        mensaje:
+          type: string
+          example: Correo o contraseña incorrectos.
+        detalles:
+          type: array
+          items:
+            type: string
+    Paginacion:
+      type: object
+      properties:
+        pagina:
+          type: integer
+          example: 1
+        limite:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 15
+    Rol:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        nombre:
+          type: string
+          enum: [ADMIN, OPERADOR]
+        descripcion:
+          type: string
+          example: Administra usuarios, bodegas, proveedores y configuración.
+    Usuario:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 7
+        nombre:
+          type: string
+          example: Laura Gómez
+        email:
+          type: string
+          format: email
+          example: laura.gomez@ferreandina.co
+        rol:
+          $ref: '#/components/schemas/Rol'
+        activo:
+          type: boolean
+          example: true
+        creadoEn:
+          type: string
+          format: date-time
+    UsuarioCrear:
+      type: object
+      required: [nombre, email, password, rolId]
+      properties:
+        nombre:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 8
+          writeOnly: true
+        rolId:
+          type: integer
+    UsuarioActualizar:
+      type: object
+      properties:
+        nombre:
+          type: string
+        email:
+          type: string
+          format: email
+        activo:
+          type: boolean
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT firmado.
+        tipo:
+          type: string
+          example: Bearer
+        expiraEn:
+          type: integer
+          description: Segundos de vigencia del token.
+          example: 3600
+        usuario:
+          $ref: '#/components/schemas/Usuario'
+    RecuperarRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+    RestablecerRequest:
+      type: object
+      required: [token, nuevaPassword]
+      properties:
+        token:
+          type: string
+          description: Token recibido por correo.
+        nuevaPassword:
+          type: string
+          format: password
+          minLength: 8
+    CambiarPasswordRequest:
+      type: object
+      required: [passwordActual, nuevaPassword]
+      properties:
+        passwordActual:
+          type: string
+          format: password
+        nuevaPassword:
+          type: string
+          format: password
+          minLength: 8

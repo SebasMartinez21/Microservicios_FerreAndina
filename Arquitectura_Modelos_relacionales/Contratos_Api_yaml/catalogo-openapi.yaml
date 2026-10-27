@@ -1,0 +1,512 @@
+openapi: 3.0.3
+info:
+  title: API de Catálogo - FerreAndina S.A.S.
+  version: 1.0.0
+  description: |
+    Microservicio de Catálogo: productos, categorías y subcategorías, búsqueda y filtros, costo de
+    referencia y asociación producto-proveedor (RF01, RF02, RF12; la asociación apoya RF03).
+
+    **Acceso:** las peticiones externas llegan solo a través del API Gateway, que valida el JWT y
+    aplica roles. Cada operación indica los roles permitidos en `x-roles`. La consulta es para
+    ADMIN y OPERADOR; la escritura, solo para ADMIN.
+
+    **Uso desde otros servicios (REST interno, sin pasar por el Gateway):**
+    - Compras consulta `GET /productos/{id}` y `GET /productos/{id}/proveedores` para validar el
+      producto y obtener su proveedor al crear una orden de compra.
+    - Inventario consulta `GET /productos/{id}` para validar el producto y traer su código, nombre,
+      categoría y costo de referencia al registrar un movimiento.
+    - Las llamadas internas reenvían las cabeceras `X-Usuario-*` recibidas. Cada servicio aplica su
+      propia regla según el campo `activo` (por ejemplo, Compras no crea órdenes de productos dados de baja).
+
+    **Evento publicado (RabbitMQ, exchange `ferreandina.events`):**
+    - `catalogo.producto.actualizado` -> Reportes. Se publica al crear o editar un producto cuando
+      cambia el nombre, la categoría, el costo de referencia o el estado (`activo`), y al darlo de baja.
+      Contenido: `eventoId`, `productoId`, `codigo`, `nombre`, `categoria` (id y nombre),
+      `costoReferencia`, `activo` y `actualizadoEn`. Este servicio no consume eventos.
+
+    **Referencias lógicas:** `proveedorId` apunta al servicio de Compras. Catálogo no lo valida
+    (no hay llaves foráneas entre servicios, RNF02); Compras verifica el proveedor al crear la orden.
+
+    **Convenciones:** rutas en español y en plural; listas paginadas con `pagina` y `limite`;
+    fechas en ISO 8601; errores con el esquema `Error`.
+servers:
+  - url: http://localhost:8000/api/catalogo
+    description: A través del API Gateway (acceso externo)
+  - url: http://catalogo-svc:3000
+    description: Interno en Kubernetes (solo entre servicios)
+tags:
+  - name: Productos
+  - name: Proveedores del producto
+  - name: Categorías
+  - name: Salud
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Salud]
+      summary: Estado del servicio (probes de Kubernetes)
+      security: []
+      responses:
+        '200':
+          description: Servicio activo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  estado: { type: string, example: ok }
+
+  /productos:
+    get:
+      tags: [Productos]
+      summary: Buscar y filtrar productos (RF01, RF12)
+      description: |
+        Por defecto lista solo productos activos; con `activo=false` lista los dados de baja.
+        `q` busca por coincidencia parcial en nombre y código; `codigo` busca el código exacto.
+        Al filtrar por categoría se incluyen sus subcategorías, salvo que `incluirSubcategorias` sea false.
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/Pagina'
+        - $ref: '#/components/parameters/Limite'
+        - name: q
+          in: query
+          description: Texto a buscar en nombre y código.
+          schema: { type: string }
+        - name: codigo
+          in: query
+          schema: { type: string }
+        - name: categoriaId
+          in: query
+          schema: { type: integer }
+        - name: incluirSubcategorias
+          in: query
+          schema: { type: boolean, default: true }
+        - name: proveedorId
+          in: query
+          description: Solo productos asociados a este proveedor.
+          schema: { type: integer }
+        - name: activo
+          in: query
+          schema: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Lista paginada de productos
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginacion'
+                  - type: object
+                    properties:
+                      datos:
+                        type: array
+                        items: { $ref: '#/components/schemas/Producto' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+    post:
+      tags: [Productos]
+      summary: Crear un producto (RF01)
+      description: |
+        Los proveedores son opcionales al crear; también se pueden asociar después.
+        Si se envían varios, solo uno puede ser el principal.
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductoCrear' }
+      responses:
+        '201':
+          description: Producto creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Producto' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '409':
+          description: Ya existe un producto con ese código
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /productos/{productoId}:
+    parameters:
+      - $ref: '#/components/parameters/ProductoId'
+    get:
+      tags: [Productos]
+      summary: Consultar un producto (RF01)
+      description: Lo usan también Compras e Inventario para validar el producto y leer su costo de referencia.
+      x-roles: [ADMIN, OPERADOR]
+      responses:
+        '200':
+          description: Producto encontrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Producto' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    put:
+      tags: [Productos]
+      summary: Actualizar un producto (RF01)
+      description: |
+        El código no se puede modificar. Los proveedores se gestionan en `/productos/{id}/proveedores`.
+        Con `activo` se puede reactivar un producto dado de baja.
+        Publica `catalogo.producto.actualizado` si cambió nombre, categoría, costo de referencia o estado.
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductoActualizar' }
+      responses:
+        '200':
+          description: Producto actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Producto' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    delete:
+      tags: [Productos]
+      summary: Dar de baja un producto (baja lógica) (RF01)
+      description: |
+        Marca el producto como inactivo y conserva el registro, para no romper el historial de otros servicios.
+        Catálogo no verifica existencias, porque el stock vive en Inventario. Publica `catalogo.producto.actualizado`.
+      x-roles: [ADMIN]
+      responses:
+        '204': { description: Producto dado de baja }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /productos/{productoId}/proveedores:
+    parameters:
+      - $ref: '#/components/parameters/ProductoId'
+    get:
+      tags: [Proveedores del producto]
+      summary: Listar los proveedores asociados a un producto
+      description: Lo usa Compras para obtener el proveedor de un producto al crear una orden.
+      x-roles: [ADMIN, OPERADOR]
+      responses:
+        '200':
+          description: Proveedores asociados
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ProveedorAsociado' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    post:
+      tags: [Proveedores del producto]
+      summary: Asociar un proveedor a un producto (RF01, RF03)
+      description: Si el producto no tiene proveedores, el primero queda como principal.
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProveedorAsociado' }
+      responses:
+        '201':
+          description: Proveedor asociado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProveedorAsociado' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: El proveedor ya está asociado a este producto
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /productos/{productoId}/proveedores/{proveedorId}:
+    parameters:
+      - $ref: '#/components/parameters/ProductoId'
+      - $ref: '#/components/parameters/ProveedorId'
+    put:
+      tags: [Proveedores del producto]
+      summary: Marcar o desmarcar el proveedor principal
+      description: Al marcar uno como principal, el anterior deja de serlo.
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [esPrincipal]
+              properties:
+                esPrincipal: { type: boolean }
+      responses:
+        '200':
+          description: Asociación actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProveedorAsociado' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    delete:
+      tags: [Proveedores del producto]
+      summary: Quitar un proveedor de un producto
+      x-roles: [ADMIN]
+      responses:
+        '204': { description: Asociación eliminada }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /categorias:
+    get:
+      tags: [Categorías]
+      summary: Listar categorías y subcategorías (RF02)
+      description: |
+        Devuelve una lista plana con `padreId`. Con `arbol=true` devuelve solo las categorías raíz,
+        cada una con sus `subcategorias` anidadas.
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - name: arbol
+          in: query
+          schema: { type: boolean, default: false }
+        - name: activa
+          in: query
+          schema: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Categorías
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Categoria' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+    post:
+      tags: [Categorías]
+      summary: Crear una categoría o subcategoría (RF02)
+      description: Con `padreId` se crea una subcategoría; sin él, una categoría raíz.
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoriaInput' }
+      responses:
+        '201':
+          description: Categoría creada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Categoria' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '409':
+          description: Ya existe una categoría con ese nombre bajo el mismo padre
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /categorias/{categoriaId}:
+    parameters:
+      - $ref: '#/components/parameters/CategoriaId'
+    get:
+      tags: [Categorías]
+      summary: Consultar una categoría (RF02)
+      x-roles: [ADMIN, OPERADOR]
+      responses:
+        '200':
+          description: Categoría encontrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Categoria' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    put:
+      tags: [Categorías]
+      summary: Actualizar una categoría (RF02)
+      description: Con `activa` se puede reactivar una categoría dada de baja.
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoriaInput' }
+      responses:
+        '200':
+          description: Categoría actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Categoria' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+    delete:
+      tags: [Categorías]
+      summary: Dar de baja una categoría (baja lógica) (RF02)
+      description: No se permite si tiene productos activos o subcategorías activas.
+      x-roles: [ADMIN]
+      responses:
+        '204': { description: Categoría dada de baja }
+        '403': { $ref: '#/components/responses/SinPermiso' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    ProductoId:
+      name: productoId
+      in: path
+      required: true
+      schema: { type: integer }
+    ProveedorId:
+      name: proveedorId
+      in: path
+      required: true
+      description: Identificador del proveedor en el servicio de Compras.
+      schema: { type: integer }
+    CategoriaId:
+      name: categoriaId
+      in: path
+      required: true
+      schema: { type: integer }
+    Pagina:
+      name: pagina
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limite:
+      name: limite
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  responses:
+    DatosInvalidos:
+      description: Datos de entrada inválidos (incluye referencias a categorías que no existen)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: Token ausente, inválido o vencido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    SinPermiso:
+      description: El rol del usuario no permite esta operación
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoEncontrado:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflicto:
+      description: Conflicto con el estado actual del recurso
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [codigo, mensaje]
+      properties:
+        codigo: { type: string, example: CODIGO_DUPLICADO }
+        mensaje: { type: string, example: Ya existe un producto con ese código. }
+        detalles:
+          type: array
+          items: { type: string }
+    Paginacion:
+      type: object
+      properties:
+        pagina: { type: integer, example: 1 }
+        limite: { type: integer, example: 20 }
+        total: { type: integer, example: 3800 }
+    UnidadMedida:
+      type: string
+      description: Valores fijos; deben coincidir con el ENUM de la base de datos.
+      enum: [UND, KG, M, LT, GAL, CAJA]
+    Categoria:
+      type: object
+      properties:
+        id: { type: integer, example: 3 }
+        nombre: { type: string, example: Tornillería }
+        descripcion: { type: string }
+        padreId: { type: integer, nullable: true, description: Vacío en las categorías raíz }
+        activa: { type: boolean, example: true }
+        subcategorias:
+          type: array
+          description: Solo viene con arbol=true.
+          items: { $ref: '#/components/schemas/Categoria' }
+    CategoriaInput:
+      type: object
+      required: [nombre]
+      properties:
+        nombre: { type: string, example: Tornillería }
+        descripcion: { type: string }
+        padreId: { type: integer, nullable: true }
+        activa: { type: boolean, default: true }
+    ProveedorAsociado:
+      type: object
+      required: [proveedorId]
+      properties:
+        proveedorId: { type: integer, example: 12 }
+        esPrincipal: { type: boolean, default: false }
+    ProductoBase:
+      type: object
+      required: [nombre, categoriaId, unidadMedida, precio, costoReferencia]
+      properties:
+        nombre: { type: string, example: Tornillo hexagonal 1/4 x 2 pulgadas }
+        descripcion: { type: string }
+        categoriaId: { type: integer, example: 3 }
+        unidadMedida: { $ref: '#/components/schemas/UnidadMedida' }
+        precio:
+          type: number
+          format: double
+          minimum: 0
+          description: Precio de venta.
+          example: 450
+        costoReferencia:
+          type: number
+          format: double
+          minimum: 0
+          description: Costo con el que se valoriza el inventario (RF11).
+          example: 280
+    ProductoCrear:
+      allOf:
+        - $ref: '#/components/schemas/ProductoBase'
+        - type: object
+          required: [codigo]
+          properties:
+            codigo: { type: string, example: TOR-HEX-014-2 }
+            proveedores:
+              type: array
+              items: { $ref: '#/components/schemas/ProveedorAsociado' }
+    ProductoActualizar:
+      allOf:
+        - $ref: '#/components/schemas/ProductoBase'
+        - type: object
+          properties:
+            activo: { type: boolean }
+    Producto:
+      type: object
+      properties:
+        id: { type: integer, example: 120 }
+        codigo: { type: string, example: TOR-HEX-014-2 }
+        nombre: { type: string }
+        descripcion: { type: string }
+        categoria:
+          type: object
+          properties:
+            id: { type: integer, example: 3 }
+            nombre: { type: string, example: Tornillería }
+        unidadMedida: { $ref: '#/components/schemas/UnidadMedida' }
+        precio: { type: number, format: double }
+        costoReferencia: { type: number, format: double }
+        activo: { type: boolean, example: true }
+        proveedores:
+          type: array
+          items: { $ref: '#/components/schemas/ProveedorAsociado' }
+        creadoEn: { type: string, format: date-time }
+        actualizadoEn: { type: string, format: date-time }

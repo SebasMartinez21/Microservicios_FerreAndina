@@ -1,0 +1,319 @@
+openapi: 3.0.3
+info:
+  title: API de Notificaciones - FerreAndina S.A.S.
+  version: 1.0.0
+  description: |
+    Microservicio de Notificaciones: alertas de stock bajo, sugerencias de traslado y órdenes de compra
+    sugeridas, en la interfaz y por correo (RF09, RF16).
+
+    **Acceso:** las peticiones externas llegan solo a través del API Gateway, que valida el JWT y aplica
+    roles. Todos los endpoints son para ADMIN y OPERADOR. El Gateway reenvía las cabeceras `X-Usuario-Id`
+    y `X-Usuario-Email`; con ellas se identifica al usuario y se toma su correo, sin consultar al Gateway.
+
+    **Quién ve qué:**
+    - En la interfaz, todo usuario autenticado ve todas las alertas y puede filtrarlas por bodega
+      o con `misBodegas`.
+    - El correo solo llega a quienes tienen una suscripción activa con canal de correo para esa bodega.
+      Si la lista `bodegas` de la suscripción está vacía, recibe las alertas de todas las bodegas.
+      Sin suscripciones no se envían correos.
+
+    **Estado de las alertas:** `PENDIENTE` -> `LEIDA` -> `ATENDIDA`. Es un estado compartido por todos los
+    usuarios, no uno por usuario. `ATENDIDA` se marca a mano, porque este servicio no se entera cuando se
+    acepta o se rechaza la sugerencia en Inventario.
+
+    **Eventos consumidos (RabbitMQ, exchange `ferreandina.events`):**
+    - `inventario.stock.bajo`: crea una alerta `STOCK_BAJO`, o `TRASLADO_SUGERIDO` si el evento trae una
+      sugerencia. Contenido: `eventoId`, `productoId`, `productoNombre`, `bodegaId`, `stockActual`,
+      `stockMinimo` y, si existe, `sugerencia` (`id`, `bodegaOrigenId`, `cantidad`).
+    - `compras.orden.sugerida`: crea una alerta `ORDEN_SUGERIDA`. Contenido: `eventoId`, `ordenId`, `numero`,
+      `productoId`, `productoNombre`, `proveedorId`, `bodegaId` y `cantidad`. En estas alertas
+      `stockActual` y `stockMinimo` quedan vacíos.
+    - El `eventoId` es único: si el mismo evento llega dos veces, la segunda alerta se rechaza y se ignora.
+
+    **Correos:** cada destinatario genera un elemento en `envios`. Si el envío falla se reintenta
+    (máximo 3 intentos) y cada intento queda registrado. Un fallo de correo nunca pierde la alerta.
+
+    Este servicio no publica eventos ni llama a otros servicios.
+
+    **Referencias lógicas:** `productoId` apunta a Catálogo; `bodegaId` y `referencia.id` apuntan a
+    Inventario o Compras; `usuarioId` apunta al Gateway. No hay llaves foráneas entre servicios (RNF02).
+
+    **Convenciones:** rutas en español y en plural; listas paginadas con `pagina` y `limite`;
+    fechas en ISO 8601; errores con el esquema `Error`.
+servers:
+  - url: http://localhost:8000/api/notificaciones
+    description: A través del API Gateway (acceso externo)
+  - url: http://notificaciones-svc:3000
+    description: Interno en Kubernetes (solo entre servicios)
+tags:
+  - name: Alertas
+  - name: Preferencias
+  - name: Salud
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Salud]
+      summary: Estado del servicio (probes de Kubernetes)
+      security: []
+      responses:
+        '200':
+          description: Servicio activo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  estado: { type: string, example: ok }
+
+  /alertas:
+    get:
+      tags: [Alertas]
+      summary: Listar alertas (RF09, RF16)
+      description: Ordenadas de la más reciente a la más antigua.
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/Pagina'
+        - $ref: '#/components/parameters/Limite'
+        - name: estado
+          in: query
+          schema: { $ref: '#/components/schemas/EstadoAlerta' }
+        - name: tipo
+          in: query
+          schema: { $ref: '#/components/schemas/TipoAlerta' }
+        - name: bodegaId
+          in: query
+          schema: { type: integer }
+        - name: misBodegas
+          in: query
+          description: Si es true, solo las alertas de las bodegas de la suscripción del usuario. Si no tiene suscripción o su lista está vacía, se devuelven todas.
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Lista paginada de alertas
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Paginacion'
+                  - type: object
+                    properties:
+                      datos:
+                        type: array
+                        items: { $ref: '#/components/schemas/Alerta' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /alertas/resumen:
+    get:
+      tags: [Alertas]
+      summary: Cantidad de alertas pendientes
+      description: Sirve para el indicador de alertas nuevas en la interfaz.
+      x-roles: [ADMIN, OPERADOR]
+      responses:
+        '200':
+          description: Conteo de alertas pendientes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pendientes: { type: integer, example: 4 }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /alertas/{alertaId}:
+    get:
+      tags: [Alertas]
+      summary: Consultar una alerta con sus envíos
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/AlertaId'
+      responses:
+        '200':
+          description: Alerta encontrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Alerta' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /alertas/{alertaId}/leer:
+    post:
+      tags: [Alertas]
+      summary: Marcar una alerta como leída
+      description: Pasa de PENDIENTE a LEIDA. Si ya estaba leída o atendida, responde 200 sin cambios.
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/AlertaId'
+      responses:
+        '200':
+          description: Alerta actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Alerta' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /alertas/{alertaId}/atender:
+    post:
+      tags: [Alertas]
+      summary: Marcar una alerta como atendida
+      description: Pasa a ATENDIDA desde PENDIENTE o LEIDA y registra `atendidaEn`. Si ya estaba atendida, responde 200 sin cambios.
+      x-roles: [ADMIN, OPERADOR]
+      parameters:
+        - $ref: '#/components/parameters/AlertaId'
+      responses:
+        '200':
+          description: Alerta atendida
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Alerta' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /preferencias:
+    get:
+      tags: [Preferencias]
+      summary: Consultar las preferencias de notificación del usuario autenticado
+      x-roles: [ADMIN, OPERADOR]
+      responses:
+        '200':
+          description: Preferencias del usuario
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Preferencias' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '404':
+          description: El usuario aún no ha configurado sus preferencias (no recibe correos)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    put:
+      tags: [Preferencias]
+      summary: Crear o actualizar las preferencias del usuario autenticado (RF09)
+      description: |
+        Crea la suscripción si no existe, o la reemplaza. El correo se toma del token del usuario y
+        se actualiza cada vez que guarda sus preferencias.
+      x-roles: [ADMIN, OPERADOR]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PreferenciasInput' }
+      responses:
+        '200':
+          description: Preferencias guardadas
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Preferencias' }
+        '400': { $ref: '#/components/responses/DatosInvalidos' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    AlertaId:
+      name: alertaId
+      in: path
+      required: true
+      description: Identificador de la alerta (ObjectId de MongoDB).
+      schema: { type: string, pattern: '^[a-f0-9]{24}$', example: 66f1a2b3c4d5e6f708192a3b }
+    Pagina:
+      name: pagina
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limite:
+      name: limite
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  responses:
+    DatosInvalidos:
+      description: Datos de entrada inválidos
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: Token ausente, inválido o vencido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoEncontrado:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [codigo, mensaje]
+      properties:
+        codigo: { type: string, example: ALERTA_NO_ENCONTRADA }
+        mensaje: { type: string, example: No existe una alerta con ese identificador. }
+        detalles:
+          type: array
+          items: { type: string }
+    Paginacion:
+      type: object
+      properties:
+        pagina: { type: integer, example: 1 }
+        limite: { type: integer, example: 20 }
+        total: { type: integer, example: 37 }
+    TipoAlerta:
+      type: string
+      enum: [STOCK_BAJO, TRASLADO_SUGERIDO, ORDEN_SUGERIDA]
+    EstadoAlerta:
+      type: string
+      enum: [PENDIENTE, LEIDA, ATENDIDA]
+    EstadoEnvio:
+      type: string
+      enum: [PENDIENTE, ENVIADO, FALLIDO]
+    Envio:
+      type: object
+      properties:
+        destinatario: { type: string, format: email }
+        estado: { $ref: '#/components/schemas/EstadoEnvio' }
+        intentos: { type: integer, example: 1 }
+        ultimoError: { type: string, nullable: true }
+        enviadoEn: { type: string, format: date-time, nullable: true }
+    Alerta:
+      type: object
+      properties:
+        id: { type: string, example: 66f1a2b3c4d5e6f708192a3b }
+        tipo: { $ref: '#/components/schemas/TipoAlerta' }
+        productoId: { type: integer, example: 120 }
+        productoNombre: { type: string, description: Copia del nombre en el momento de la alerta }
+        bodegaId: { type: integer, example: 2 }
+        stockActual: { type: integer, nullable: true, description: Vacío en las alertas ORDEN_SUGERIDA }
+        stockMinimo: { type: integer, nullable: true, description: Vacío en las alertas ORDEN_SUGERIDA }
+        estado: { $ref: '#/components/schemas/EstadoAlerta' }
+        referencia:
+          type: object
+          nullable: true
+          description: Sugerencia de Inventario u orden de Compras relacionada. Vacía en las alertas STOCK_BAJO sin sugerencia.
+          properties:
+            tipo: { type: string, enum: [SUGERENCIA, ORDEN_COMPRA] }
+            id: { type: integer }
+        envios:
+          type: array
+          items: { $ref: '#/components/schemas/Envio' }
+        creadaEn: { type: string, format: date-time }
+        atendidaEn: { type: string, format: date-time, nullable: true }
+    PreferenciasInput:
+      type: object
+      properties:
+        canalInterfaz: { type: boolean, default: true }
+        canalCorreo: { type: boolean, default: false }
+        bodegas:
+          type: array
+          description: Bodegas de interés. Vacío significa todas.
+          items: { type: integer }
+        activa: { type: boolean, default: true }
+    Preferencias:
+      allOf:
+        - $ref: '#/components/schemas/PreferenciasInput'
+        - type: object
+          properties:
+            usuarioId: { type: integer, example: 7 }
+            email: { type: string, format: email }
