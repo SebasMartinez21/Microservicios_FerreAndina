@@ -1,7 +1,5 @@
 const express = require("express");
-const fs = require("fs");
-const YAML = require("yaml");
-const swaggerUi = require("swagger-ui-express");
+const path = require("path");
 
 const rabbit = require("./config/rabbit");
 const { validarToken } = require("./middlewares/auth");
@@ -9,9 +7,23 @@ const { validarToken } = require("./middlewares/auth");
 const app = express();
 app.use(express.json());
 
-// Documentación de la API en /api-docs
-const contrato = YAML.parse(fs.readFileSync(__dirname + "/../openapi.yaml", "utf8"));
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(contrato));
+// Documentación de la API (Swagger). Se ve desde el gateway en /api/catalogo/api-docs
+app.get("/api-docs", (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>API de Catálogo - FerreAndina</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+</head>
+<body>
+  <div id="swagger"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>SwaggerUIBundle({ url: "/api/catalogo/api-docs/openapi.yaml", dom_id: "#swagger" });</script>
+</body>
+</html>`);
+});
+app.get("/api-docs/openapi.yaml", (req, res) => res.sendFile(path.join(__dirname, "..", "openapi.yaml")));
 
 app.use(validarToken);
 

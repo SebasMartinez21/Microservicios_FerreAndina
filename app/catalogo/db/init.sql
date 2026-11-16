@@ -1,5 +1,8 @@
 -- Tablas de Catálogo. MySQL las crea la primera vez que arranca el contenedor.
 
+-- Para que las tildes se guarden bien
+SET NAMES utf8mb4;
+
 CREATE TABLE categorias (
   id INT AUTO_INCREMENT PRIMARY KEY,
   nombre VARCHAR(100) NOT NULL,

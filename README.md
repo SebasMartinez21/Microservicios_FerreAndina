@@ -33,7 +33,8 @@ docker compose up --build
 ```
 
 - Gateway: http://localhost:8000/api
-- Swagger de Catálogo: http://localhost:8000/api/catalogo/api-docs/
+- Swagger del gateway: http://localhost:8000/api/docs
+- Swagger de Catálogo: http://localhost:8000/api/catalogo/api-docs
 - Panel de RabbitMQ: http://localhost:15672 (guest / guest)
 
 Usuarios de prueba: `admin@ferreandina.com` / `admin1234` y `operador@ferreandina.com` / `operador1234`.
