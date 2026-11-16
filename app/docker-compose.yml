@@ -12,7 +12,9 @@ x-mysql-healthcheck: &mysql-healthcheck
 services:
   # ---------- API Gateway (Laravel) ----------
   gateway:
-    build: ./gateway
+    build:
+      context: ..   # la raíz del repo, para copiar el contrato OpenAPI
+      dockerfile: app/gateway/Dockerfile
     ports:
       - "8000:80"
     environment:

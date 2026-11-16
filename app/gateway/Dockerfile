@@ -1,9 +1,11 @@
+# Se construye desde la raíz del repo (ver docker-compose.yml) para poder copiar el contrato OpenAPI
+
 # Instala las dependencias de PHP con la imagen de composer
 FROM composer:2 AS dependencias
 WORKDIR /app
-COPY composer.json composer.lock ./
+COPY app/gateway/composer.json app/gateway/composer.lock ./
 RUN composer install --no-dev --no-scripts --no-autoloader --ignore-platform-reqs
-COPY . .
+COPY app/gateway/ .
 RUN composer dump-autoload --optimize --no-dev
 
 FROM php:8.2-apache
@@ -18,6 +20,8 @@ RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-av
 
 WORKDIR /var/www/html
 COPY --from=dependencias /app ./
+# El contrato OpenAPI de la Entrega 2, para mostrarlo en /api/docs
+COPY docs/contratos-api/gateway-openapi.yaml ./openapi.yaml
 
 # Apache corre como www-data y Laravel escribe en storage/ y bootstrap/cache/
 RUN chown -R www-data:www-data storage bootstrap/cache

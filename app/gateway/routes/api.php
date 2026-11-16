@@ -11,6 +11,10 @@ $servicios = 'catalogo|inventario|compras|notificaciones|reportes';
 Route::get('/health', fn () => ['estado' => 'ok']);
 Route::post('/auth/login', [AutenticacionController::class, 'login']);
 
+// Documentación (Swagger) del gateway
+Route::get('/docs', fn () => view('docs'));
+Route::get('/docs/openapi.yaml', fn () => response()->file(base_path('openapi.yaml'), ['Content-Type' => 'text/yaml']));
+
 // La documentación (Swagger) de cada microservicio es pública
 Route::get('/{servicio}/{ruta}', [ProxyController::class, 'reenviar'])
     ->where(['servicio' => $servicios, 'ruta' => 'api-docs.*']);
