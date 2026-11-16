@@ -22,6 +22,7 @@ docs/
   entrega-1/              investigación y requerimientos
   entrega-2/              diseño, diagramas y modelo de datos
   contratos-api/          contratos OpenAPI de cada servicio
+pruebas-rendimiento/      las 15 pruebas de Locust de cada integrante, una carpeta por persona
 ```
 
 ## Cómo correrlo
