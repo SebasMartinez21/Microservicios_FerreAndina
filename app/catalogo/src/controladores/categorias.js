@@ -8,9 +8,9 @@ async function listar(req, res) {
   if (req.query.arbol !== "true") return res.json(categorias);
 
   // Arma el árbol: cada categoría raíz con sus subcategorías
-  const raices = categorias.filter((c) => c.padreId === null);
+  const raices = categorias.filter((categoria) => categoria.padreId === null);
   for (const raiz of raices) {
-    raiz.subcategorias = categorias.filter((c) => c.padreId === raiz.id);
+    raiz.subcategorias = categorias.filter((categoria) => categoria.padreId === raiz.id);
   }
   res.json(raices);
 }

@@ -16,9 +16,9 @@ class UsuarioController extends Controller
 
         $consulta = Usuario::with('rol');
         if ($request->q) {
-            $consulta->where(function ($q) use ($request) {
-                $q->where('nombre', 'like', '%' . $request->q . '%')
-                  ->orWhere('correo', 'like', '%' . $request->q . '%');
+            $consulta->where(function ($busqueda) use ($request) {
+                $busqueda->where('nombre', 'like', '%' . $request->q . '%')
+                    ->orWhere('correo', 'like', '%' . $request->q . '%');
             });
         }
 

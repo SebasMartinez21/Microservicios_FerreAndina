@@ -14,7 +14,7 @@ async function conectar() {
       console.log("Conectado a RabbitMQ");
     } catch (error) {
       console.log("RabbitMQ no responde, reintentando...");
-      await new Promise((r) => setTimeout(r, 5000));
+      await new Promise((esperar) => setTimeout(esperar, 5000));
     }
   }
 }

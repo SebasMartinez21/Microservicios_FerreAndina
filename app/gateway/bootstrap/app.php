@@ -19,18 +19,18 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->shouldRenderJsonWhen(fn ($request) => $request->is('api/*'));
 
         // Errores con el mismo formato que los microservicios: { codigo, mensaje, detalles }
-        $exceptions->render(fn (\Illuminate\Validation\ValidationException $e) => response()->json([
+        $exceptions->render(fn (\Illuminate\Validation\ValidationException $error) => response()->json([
             'codigo' => 'DATOS_INVALIDOS',
             'mensaje' => 'Datos de entrada inválidos',
-            'detalles' => collect($e->errors())->flatten()->all(),
+            'detalles' => collect($error->errors())->flatten()->all(),
         ], 400));
 
-        $exceptions->render(fn (\Illuminate\Auth\AuthenticationException $e) => response()->json([
+        $exceptions->render(fn (\Illuminate\Auth\AuthenticationException $error) => response()->json([
             'codigo' => 'NO_AUTENTICADO',
             'mensaje' => 'Falta el token o no es válido',
         ], 401));
 
-        $exceptions->render(fn (\Symfony\Component\HttpKernel\Exception\NotFoundHttpException $e) => response()->json([
+        $exceptions->render(fn (\Symfony\Component\HttpKernel\Exception\NotFoundHttpException $error) => response()->json([
             'codigo' => 'NO_ENCONTRADO',
             'mensaje' => 'No existe',
         ], 404));

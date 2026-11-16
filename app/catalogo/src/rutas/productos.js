@@ -1,18 +1,18 @@
 const express = require("express");
-const c = require("../controladores/productos");
+const productos = require("../controladores/productos");
 const { soloAdmin } = require("../middlewares/auth");
 
 const router = express.Router();
 
-router.get("/", c.listar);
-router.post("/", soloAdmin, c.crear);
-router.get("/:id", c.consultar);
-router.put("/:id", soloAdmin, c.actualizar);
-router.delete("/:id", soloAdmin, c.darDeBaja);
+router.get("/", productos.listar);
+router.post("/", soloAdmin, productos.crear);
+router.get("/:id", productos.consultar);
+router.put("/:id", soloAdmin, productos.actualizar);
+router.delete("/:id", soloAdmin, productos.darDeBaja);
 
-router.get("/:id/proveedores", c.listarProveedores);
-router.post("/:id/proveedores", soloAdmin, c.asociarProveedor);
-router.put("/:id/proveedores/:proveedorId", soloAdmin, c.marcarPrincipal);
-router.delete("/:id/proveedores/:proveedorId", soloAdmin, c.quitarProveedor);
+router.get("/:id/proveedores", productos.listarProveedores);
+router.post("/:id/proveedores", soloAdmin, productos.asociarProveedor);
+router.put("/:id/proveedores/:proveedorId", soloAdmin, productos.marcarPrincipal);
+router.delete("/:id/proveedores/:proveedorId", soloAdmin, productos.quitarProveedor);
 
 module.exports = router;

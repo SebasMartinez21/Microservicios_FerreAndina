@@ -3,94 +3,94 @@ const db = require("../config/db");
 // Consultas SQL de las tablas productos y producto_proveedor
 
 const SELECT = `
-  SELECT p.*, c.nombre AS categoria_nombre
-  FROM productos p JOIN categorias c ON c.id = p.categoria_id`;
+  SELECT productos.*, categorias.nombre AS categoria_nombre
+  FROM productos JOIN categorias ON categorias.id = productos.categoria_id`;
 
-function formato(p) {
+function formato(fila) {
   return {
-    id: p.id,
-    codigo: p.codigo,
-    nombre: p.nombre,
-    descripcion: p.descripcion,
-    categoria: { id: p.categoria_id, nombre: p.categoria_nombre },
-    unidadMedida: p.unidad_medida,
-    precio: Number(p.precio),
-    costoReferencia: Number(p.costo_referencia),
-    activo: !!p.activo,
-    creadoEn: p.creado_en,
-    actualizadoEn: p.actualizado_en,
+    id: fila.id,
+    codigo: fila.codigo,
+    nombre: fila.nombre,
+    descripcion: fila.descripcion,
+    categoria: { id: fila.categoria_id, nombre: fila.categoria_nombre },
+    unidadMedida: fila.unidad_medida,
+    precio: Number(fila.precio),
+    costoReferencia: Number(fila.costo_referencia),
+    activo: !!fila.activo,
+    creadoEn: fila.creado_en,
+    actualizadoEn: fila.actualizado_en,
   };
 }
 
 // filtros: { q, codigo, categoriaId, incluirSubcategorias, proveedorId, activo, pagina, limite }
-async function listar(f) {
-  let where = " WHERE p.activo = ?";
-  const params = [f.activo];
+async function listar(filtros) {
+  let where = " WHERE productos.activo = ?";
+  const params = [filtros.activo];
 
-  if (f.q) {
-    where += " AND (p.nombre LIKE ? OR p.codigo LIKE ?)";
-    params.push(`%${f.q}%`, `%${f.q}%`);
+  if (filtros.q) {
+    where += " AND (productos.nombre LIKE ? OR productos.codigo LIKE ?)";
+    params.push(`%${filtros.q}%`, `%${filtros.q}%`);
   }
-  if (f.codigo) {
-    where += " AND p.codigo = ?";
-    params.push(f.codigo);
+  if (filtros.codigo) {
+    where += " AND productos.codigo = ?";
+    params.push(filtros.codigo);
   }
-  if (f.categoriaId) {
-    if (f.incluirSubcategorias) {
-      where += " AND (p.categoria_id = ? OR c.padre_id = ?)";
-      params.push(f.categoriaId, f.categoriaId);
+  if (filtros.categoriaId) {
+    if (filtros.incluirSubcategorias) {
+      where += " AND (productos.categoria_id = ? OR categorias.padre_id = ?)";
+      params.push(filtros.categoriaId, filtros.categoriaId);
     } else {
-      where += " AND p.categoria_id = ?";
-      params.push(f.categoriaId);
+      where += " AND productos.categoria_id = ?";
+      params.push(filtros.categoriaId);
     }
   }
-  if (f.proveedorId) {
-    where += " AND p.id IN (SELECT producto_id FROM producto_proveedor WHERE proveedor_id = ?)";
-    params.push(f.proveedorId);
+  if (filtros.proveedorId) {
+    where += " AND productos.id IN (SELECT producto_id FROM producto_proveedor WHERE proveedor_id = ?)";
+    params.push(filtros.proveedorId);
   }
 
   const [[{ total }]] = await db.query(
-    "SELECT COUNT(*) AS total FROM productos p JOIN categorias c ON c.id = p.categoria_id" + where, params
+    "SELECT COUNT(*) AS total FROM productos JOIN categorias ON categorias.id = productos.categoria_id" + where, params
   );
   const [filas] = await db.query(
-    SELECT + where + " ORDER BY p.nombre LIMIT ? OFFSET ?",
-    [...params, f.limite, (f.pagina - 1) * f.limite]
+    SELECT + where + " ORDER BY productos.nombre LIMIT ? OFFSET ?",
+    [...params, filtros.limite, (filtros.pagina - 1) * filtros.limite]
   );
   return { total, datos: filas.map(formato) };
 }
 
 async function buscar(id) {
-  const [filas] = await db.query(SELECT + " WHERE p.id = ?", [id]);
+  const [filas] = await db.query(SELECT + " WHERE productos.id = ?", [id]);
   if (filas.length === 0) return null;
   const producto = formato(filas[0]);
   producto.proveedores = await listarProveedores(id);
   return producto;
 }
 
-async function crear(d) {
-  const [r] = await db.query(
+async function crear(datos) {
+  const [resultado] = await db.query(
     `INSERT INTO productos (codigo, nombre, descripcion, categoria_id, unidad_medida, precio, costo_referencia)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [d.codigo, d.nombre, d.descripcion || null, d.categoriaId, d.unidadMedida, d.precio, d.costoReferencia]
+    [datos.codigo, datos.nombre, datos.descripcion || null, datos.categoriaId, datos.unidadMedida, datos.precio, datos.costoReferencia]
   );
-  for (const prov of d.proveedores || []) {
-    await asociarProveedor(r.insertId, prov.proveedorId, !!prov.esPrincipal);
+  for (const prov of datos.proveedores || []) {
+    await asociarProveedor(resultado.insertId, prov.proveedorId, !!prov.esPrincipal);
   }
-  return buscar(r.insertId);
+  return buscar(resultado.insertId);
 }
 
-async function actualizar(id, d) {
-  const [r] = await db.query(
+async function actualizar(id, datos) {
+  const [resultado] = await db.query(
     `UPDATE productos SET nombre = ?, descripcion = ?, categoria_id = ?, unidad_medida = ?,
      precio = ?, costo_referencia = ?, activo = ? WHERE id = ?`,
-    [d.nombre, d.descripcion || null, d.categoriaId, d.unidadMedida, d.precio, d.costoReferencia, d.activo !== false, id]
+    [datos.nombre, datos.descripcion || null, datos.categoriaId, datos.unidadMedida, datos.precio, datos.costoReferencia, datos.activo !== false, id]
   );
-  return r.affectedRows ? buscar(id) : null;
+  return resultado.affectedRows ? buscar(id) : null;
 }
 
 async function darDeBaja(id) {
-  const [r] = await db.query("UPDATE productos SET activo = 0 WHERE id = ?", [id]);
-  return r.affectedRows ? buscar(id) : null;
+  const [resultado] = await db.query("UPDATE productos SET activo = 0 WHERE id = ?", [id]);
+  return resultado.affectedRows ? buscar(id) : null;
 }
 
 // ----- proveedores del producto -----
@@ -99,7 +99,7 @@ async function listarProveedores(productoId) {
   const [filas] = await db.query(
     "SELECT proveedor_id, es_principal FROM producto_proveedor WHERE producto_id = ?", [productoId]
   );
-  return filas.map((x) => ({ proveedorId: x.proveedor_id, esPrincipal: !!x.es_principal }));
+  return filas.map((fila) => ({ proveedorId: fila.proveedor_id, esPrincipal: !!fila.es_principal }));
 }
 
 // Si este queda como principal, los demás dejan de serlo
@@ -117,18 +117,18 @@ async function marcarPrincipal(productoId, proveedorId, esPrincipal) {
   if (esPrincipal) {
     await db.query("UPDATE producto_proveedor SET es_principal = 0 WHERE producto_id = ?", [productoId]);
   }
-  const [r] = await db.query(
+  const [resultado] = await db.query(
     "UPDATE producto_proveedor SET es_principal = ? WHERE producto_id = ? AND proveedor_id = ?",
     [esPrincipal, productoId, proveedorId]
   );
-  return r.affectedRows > 0;
+  return resultado.affectedRows > 0;
 }
 
 async function quitarProveedor(productoId, proveedorId) {
-  const [r] = await db.query(
+  const [resultado] = await db.query(
     "DELETE FROM producto_proveedor WHERE producto_id = ? AND proveedor_id = ?", [productoId, proveedorId]
   );
-  return r.affectedRows > 0;
+  return resultado.affectedRows > 0;
 }
 
 module.exports = {

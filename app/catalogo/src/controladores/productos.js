@@ -17,14 +17,14 @@ function validar(body) {
 }
 
 // Avisa a Reportes que el producto cambió
-function avisarCambio(p) {
+function avisarCambio(producto) {
   rabbit.publicar("catalogo.producto.actualizado", {
-    productoId: p.id,
-    codigo: p.codigo,
-    nombre: p.nombre,
-    categoria: p.categoria,
-    costoReferencia: p.costoReferencia,
-    activo: p.activo,
+    productoId: producto.id,
+    codigo: producto.codigo,
+    nombre: producto.nombre,
+    categoria: producto.categoria,
+    costoReferencia: producto.costoReferencia,
+    activo: producto.activo,
   });
 }
 

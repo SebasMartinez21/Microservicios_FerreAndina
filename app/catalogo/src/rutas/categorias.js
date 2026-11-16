@@ -1,13 +1,13 @@
 const express = require("express");
-const c = require("../controladores/categorias");
+const categorias = require("../controladores/categorias");
 const { soloAdmin } = require("../middlewares/auth");
 
 const router = express.Router();
 
-router.get("/", c.listar);
-router.post("/", soloAdmin, c.crear);
-router.get("/:id", c.consultar);
-router.put("/:id", soloAdmin, c.actualizar);
-router.delete("/:id", soloAdmin, c.darDeBaja);
+router.get("/", categorias.listar);
+router.post("/", soloAdmin, categorias.crear);
+router.get("/:id", categorias.consultar);
+router.put("/:id", soloAdmin, categorias.actualizar);
+router.delete("/:id", soloAdmin, categorias.darDeBaja);
 
 module.exports = router;

@@ -33,7 +33,7 @@ class ProxyController extends Controller
             $respuesta = Http::withHeaders($cabeceras)
                 ->timeout(10)
                 ->send($request->method(), $url, $opciones);
-        } catch (ConnectionException $e) {
+        } catch (ConnectionException $error) {
             return response()->json([
                 'codigo' => 'SERVICIO_NO_DISPONIBLE',
                 'mensaje' => "No se pudo conectar con el microservicio de $servicio",

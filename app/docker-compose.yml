@@ -1,6 +1,8 @@
 # Levanta todo el sistema desde esta carpeta (app/): docker compose up --build
 # Solo el gateway publica un puerto (8000); los microservicios no se ven desde afuera.
 
+name: ferreandina
+
 x-mysql-healthcheck: &mysql-healthcheck
   test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
   interval: 5s
