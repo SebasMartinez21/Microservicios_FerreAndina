@@ -1,4 +1,4 @@
-# Levanta todo el sistema: docker compose up --build
+# Levanta todo el sistema desde esta carpeta (app/): docker compose up --build
 # Solo el gateway publica un puerto (8000); los microservicios no se ven desde afuera.
 
 x-mysql-healthcheck: &mysql-healthcheck
@@ -22,6 +22,9 @@ services:
       DB_DATABASE: gateway
       DB_USERNAME: root
       DB_PASSWORD: root
+      SESSION_DRIVER: file
+      CACHE_STORE: file
+      QUEUE_CONNECTION: sync
       GATEWAY_TOKEN: token-interno-ferreandina
     depends_on:
       gateway-db:
@@ -39,8 +42,8 @@ services:
   # ---------- Catálogo (Express + MySQL) ----------
   catalogo:
     build:
-      context: .
-      dockerfile: catalogo/Dockerfile
+      context: ..   # la raíz del repo, para copiar el contrato OpenAPI
+      dockerfile: app/catalogo/Dockerfile
     environment:
       DB_HOST: catalogo-db
       DB_NAME: catalogo
@@ -59,7 +62,7 @@ services:
       MYSQL_DATABASE: catalogo
     volumes:
       - datos-catalogo:/var/lib/mysql
-      - ./catalogo/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./catalogo/db/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck: *mysql-healthcheck
 
   # ---------- RabbitMQ (eventos entre servicios) ----------
