@@ -1,0 +1,8 @@
+.git
+**/vendor
+**/node_modules
+app/gateway/.env
+app/gateway/database/database.sqlite
+app/gateway/storage/logs/*
+app/gateway/bootstrap/cache/*.php
+docs/entrega-*
