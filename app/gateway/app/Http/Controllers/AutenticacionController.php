@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\TokenRevocado;
 use App\Models\Usuario;
+use Firebase\JWT\JWT;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 
 class AutenticacionController extends Controller
 {
@@ -22,19 +25,31 @@ class AutenticacionController extends Controller
             return response()->json(['codigo' => 'USUARIO_INACTIVO', 'mensaje' => 'El usuario está desactivado'], 403);
         }
 
-        $token = $usuario->createToken('sesion')->plainTextToken;
+        $duracion = config('services.jwt.duracion');
+        $ahora = time();
+
+        $token = JWT::encode([
+            'sub' => (string) $usuario->id,
+            'email' => $usuario->correo,
+            'rol' => $usuario->rol->nombre,
+            'jti' => (string) Str::uuid(),
+            'iat' => $ahora,
+            'exp' => $ahora + $duracion,
+        ], config('services.jwt.secreto'), 'HS256');
 
         return response()->json([
             'token' => $token,
             'tipo' => 'Bearer',
+            'expiraEn' => $duracion,
             'usuario' => $usuario,
         ]);
     }
 
     public function logout(Request $request)
     {
-        // Borra el token actual, así ya no sirve para más peticiones
-        $request->user()->currentAccessToken()->delete();
+        // Guarda el jti del token actual, así ya no sirve para más peticiones
+        $datosToken = $request->attributes->get('jwt');
+        TokenRevocado::firstOrCreate(['jti' => $datosToken->jti], ['expira_en' => date('Y-m-d H:i:s', $datosToken->exp)]);
 
         return response()->noContent();
     }

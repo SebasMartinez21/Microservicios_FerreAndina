@@ -8,7 +8,7 @@ microservicios. Todas las peticiones entran por un API Gateway hecho por nosotro
 ```
 app/                      código del sistema
   docker-compose.yml      levanta todo junto
-  gateway/                API Gateway (Laravel + Sanctum): login, usuarios, roles y reenvío a los servicios
+  gateway/                API Gateway (Laravel + JWT): login, usuarios, roles y reenvío a los servicios
   catalogo/               microservicio de Catálogo (Express + MySQL)
     db/init.sql           tablas y datos de prueba
     src/

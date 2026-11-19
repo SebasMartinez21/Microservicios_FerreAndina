@@ -19,7 +19,7 @@ Route::get('/docs/openapi.yaml', fn () => response()->file(base_path('openapi.ya
 Route::get('/{servicio}/{ruta}', [ProxyController::class, 'reenviar'])
     ->where(['servicio' => $servicios, 'ruta' => 'api-docs.*']);
 
-Route::middleware('auth:sanctum')->group(function () use ($servicios) {
+Route::middleware('jwt')->group(function () use ($servicios) {
     Route::post('/auth/logout', [AutenticacionController::class, 'logout']);
     Route::get('/auth/perfil', [AutenticacionController::class, 'perfil']);
     Route::post('/auth/cambiar-password', [AutenticacionController::class, 'cambiarPassword']);

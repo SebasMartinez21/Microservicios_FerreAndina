@@ -30,6 +30,7 @@ services:
       CACHE_STORE: file
       QUEUE_CONNECTION: sync
       GATEWAY_TOKEN: token-interno-ferreandina
+      JWT_SECRET: clave-de-desarrollo-ferreandina-jwt-2026
     depends_on:
       gateway-db:
         condition: service_healthy
