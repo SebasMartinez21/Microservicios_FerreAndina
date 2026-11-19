@@ -34,6 +34,11 @@ Route::middleware('jwt')->group(function () use ($servicios) {
         Route::get('/roles', [UsuarioController::class, 'roles']);
     });
 
+    // Reportes es solo para ADMIN
+    Route::any('/{servicio}/{ruta?}', [ProxyController::class, 'reenviar'])
+        ->where(['servicio' => 'reportes', 'ruta' => '.*'])
+        ->middleware('admin');
+
     // Todo lo demás se reenvía al microservicio: /api/catalogo/productos, /api/inventario/stock/1, ...
     Route::any('/{servicio}/{ruta?}', [ProxyController::class, 'reenviar'])
         ->where(['servicio' => $servicios, 'ruta' => '.*']);
