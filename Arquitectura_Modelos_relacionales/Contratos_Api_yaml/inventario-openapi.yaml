@@ -395,8 +395,9 @@ paths:
       tags: [Devoluciones]
       summary: Registrar una devolución (RF13)
       description: |
-        CLIENTE: el producto entra a la bodega. PROVEEDOR: el producto sale de la bodega.
-        Genera automáticamente el movimiento de stock asociado.
+        No hay tabla aparte: la devolución se guarda como un movimiento. CLIENTE se registra como
+        DEVOLUCION_CLIENTE (el producto entra a la bodega) y PROVEEDOR como DEVOLUCION_PROVEEDOR
+        (el producto sale de la bodega).
       x-roles: [ADMIN, OPERADOR]
       requestBody:
         required: true
@@ -576,7 +577,8 @@ components:
         stockMinimo: { type: integer, example: 20 }
     TipoMovimiento:
       type: string
-      enum: [ENTRADA, SALIDA, AJUSTE, TRASLADO]
+      description: Las devoluciones se guardan como movimientos. DEVOLUCION_CLIENTE entra a la bodega destino y DEVOLUCION_PROVEEDOR sale de la bodega origen.
+      enum: [ENTRADA, SALIDA, AJUSTE, TRASLADO, DEVOLUCION_CLIENTE, DEVOLUCION_PROVEEDOR]
     MovimientoInput:
       type: object
       required: [tipo, productoId, cantidad]
@@ -595,8 +597,8 @@ components:
           nullable: true
           description: Documento asociado, por ejemplo una orden de compra recibida.
           properties:
-            tipo: { type: string, enum: [ORDEN_COMPRA, DEVOLUCION, SUGERENCIA] }
-            id: { type: integer }
+            tipo: { type: string, enum: [ORDEN_COMPRA, FACTURA, SUGERENCIA] }
+            id: { type: string, description: Identificador del documento de origen }
     Movimiento:
       allOf:
         - $ref: '#/components/schemas/MovimientoInput'
@@ -638,13 +640,13 @@ components:
         - $ref: '#/components/schemas/DevolucionInput'
         - type: object
           properties:
-            id: { type: integer }
-            movimientoId: { type: integer, description: Movimiento de stock generado }
+            id: { type: integer, description: Id del movimiento en que se guardó la devolución }
             usuarioId: { type: integer }
             fecha: { type: string, format: date-time }
     EstadoSugerencia:
       type: string
-      enum: [PENDIENTE, ACEPTADA, RECHAZADA]
+      description: DERIVADA es la sugerencia de tipo COMPRA ya entregada a Compras; nace en ese estado.
+      enum: [PENDIENTE, ACEPTADA, RECHAZADA, DERIVADA]
     Sugerencia:
       type: object
       properties:
@@ -660,3 +662,5 @@ components:
         estado: { $ref: '#/components/schemas/EstadoSugerencia' }
         movimientoId: { type: integer, nullable: true, description: Traslado generado al aceptar la sugerencia }
         creadaEn: { type: string, format: date-time }
+        usuarioId: { type: integer, nullable: true, description: Usuario que aceptó o rechazó la sugerencia }
+        atendidaEn: { type: string, format: date-time, nullable: true }
