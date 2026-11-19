@@ -10,6 +10,11 @@ use Illuminate\Support\Facades\Http;
 // Ejemplo: GET /api/catalogo/productos  ->  GET http://catalogo:3000/productos
 class ProxyController extends Controller
 {
+    public function reenviarReportes(Request $request, string $ruta = '')
+    {
+        return $this->reenviar($request, 'reportes', $ruta);
+    }
+
     public function reenviar(Request $request, string $servicio, string $ruta = '')
     {
         $url = config("services.microservicios.$servicio") . '/' . $ruta;
