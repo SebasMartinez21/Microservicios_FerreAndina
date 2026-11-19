@@ -69,11 +69,10 @@ class UsuarioController extends Controller
         return response()->json($usuario->load('rol'));
     }
 
-    // Baja lógica: se desactiva y se le cierran las sesiones
+    // Baja lógica: el gateway deja de aceptar los tokens de un usuario inactivo
     public function destroy(Usuario $usuario)
     {
         $usuario->update(['activo' => false]);
-        $usuario->tokens()->delete();
 
         return response()->noContent();
     }

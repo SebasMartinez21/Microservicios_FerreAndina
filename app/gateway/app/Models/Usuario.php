@@ -3,12 +3,9 @@
 namespace App\Models;
 
 use Illuminate\Foundation\Auth\User as Authenticatable;
-use Laravel\Sanctum\HasApiTokens;
 
 class Usuario extends Authenticatable
 {
-    use HasApiTokens;
-
     protected $table = 'usuarios';
     const CREATED_AT = 'creado_en';
     const UPDATED_AT = 'actualizado_en';

@@ -20,6 +20,7 @@ class ProxyController extends Controller
         $cabeceras = [
             'X-Gateway-Token' => config('services.microservicios.token'),
             'X-Usuario-Id' => $usuario?->id,
+            'X-Usuario-Email' => $usuario?->correo,
             'X-Usuario-Rol' => $usuario?->rol?->nombre,
             'Accept' => $request->header('Accept', 'application/json'),
         ];

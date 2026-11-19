@@ -24,6 +24,12 @@ return [
         'reportes' => env('REPORTES_URL', 'http://reportes:3000'),
     ],
 
+    // Firma y duración (en segundos) de los JWT que entrega el login
+    'jwt' => [
+        'secreto' => env('JWT_SECRET'),
+        'duracion' => 3600,
+    ],
+
     'postmark' => [
         'key' => env('POSTMARK_API_KEY'),
     ],
