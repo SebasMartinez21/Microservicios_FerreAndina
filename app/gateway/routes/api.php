@@ -10,6 +10,8 @@ $servicios = 'catalogo|inventario|compras|notificaciones|reportes';
 
 Route::get('/health', fn () => ['estado' => 'ok']);
 Route::post('/auth/login', [AutenticacionController::class, 'login']);
+Route::post('/auth/recuperar', [AutenticacionController::class, 'recuperar']);
+Route::post('/auth/restablecer', [AutenticacionController::class, 'restablecer']);
 
 // Documentación (Swagger) del gateway
 Route::get('/docs', fn () => view('docs'));
@@ -33,6 +35,11 @@ Route::middleware('jwt')->group(function () use ($servicios) {
         Route::put('/usuarios/{usuario}/rol', [UsuarioController::class, 'asignarRol']);
         Route::get('/roles', [UsuarioController::class, 'roles']);
     });
+
+    // Reportes es solo para ADMIN
+    Route::any('/reportes/{ruta?}', [ProxyController::class, 'reenviarReportes'])
+        ->where('ruta', '.*')
+        ->middleware('admin');
 
     // Todo lo demás se reenvía al microservicio: /api/catalogo/productos, /api/inventario/stock/1, ...
     Route::any('/{servicio}/{ruta?}', [ProxyController::class, 'reenviar'])

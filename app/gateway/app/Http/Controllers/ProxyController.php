@@ -10,6 +10,11 @@ use Illuminate\Support\Facades\Http;
 // Ejemplo: GET /api/catalogo/productos  ->  GET http://catalogo:3000/productos
 class ProxyController extends Controller
 {
+    public function reenviarReportes(Request $request, string $ruta = '')
+    {
+        return $this->reenviar($request, 'reportes', $ruta);
+    }
+
     public function reenviar(Request $request, string $servicio, string $ruta = '')
     {
         $url = config("services.microservicios.$servicio") . '/' . $ruta;
@@ -35,6 +40,14 @@ class ProxyController extends Controller
                 ->timeout(10)
                 ->send($request->method(), $url, $opciones);
         } catch (ConnectionException $error) {
+            // cURL error 28: el microservicio no respondió a tiempo
+            if (str_contains($error->getMessage(), 'cURL error 28')) {
+                return response()->json([
+                    'codigo' => 'TIEMPO_AGOTADO',
+                    'mensaje' => "El microservicio de $servicio no respondió a tiempo",
+                ], 504);
+            }
+
             return response()->json([
                 'codigo' => 'SERVICIO_NO_DISPONIBLE',
                 'mensaje' => "No se pudo conectar con el microservicio de $servicio",

@@ -25,6 +25,7 @@ function avisarCambio(producto) {
     categoria: producto.categoria,
     costoReferencia: producto.costoReferencia,
     activo: producto.activo,
+    actualizadoEn: producto.actualizadoEn,
   });
 }
 

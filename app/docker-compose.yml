@@ -3,17 +3,11 @@
 
 name: ferreandina
 
-x-mysql-healthcheck: &mysql-healthcheck
-  test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
-  interval: 5s
-  retries: 30
-  start_period: 120s   # la primera vez MySQL tarda en iniciar
-
 services:
-  # ---------- API Gateway (Laravel) ----------
+  # API Gateway (Laravel)
   gateway:
     build:
-      context: ..   # la raíz del repo, para copiar el contrato OpenAPI
+      context: ..
       dockerfile: app/gateway/Dockerfile
     ports:
       - "8000:80"
@@ -22,13 +16,11 @@ services:
       APP_DEBUG: "true"
       DB_CONNECTION: mysql
       DB_HOST: gateway-db
-      DB_PORT: 3306
       DB_DATABASE: gateway
       DB_USERNAME: root
       DB_PASSWORD: root
       SESSION_DRIVER: file
       CACHE_STORE: file
-      QUEUE_CONNECTION: sync
       GATEWAY_TOKEN: token-interno-ferreandina
       JWT_SECRET: clave-de-desarrollo-ferreandina-jwt-2026
     depends_on:
@@ -42,12 +34,15 @@ services:
       MYSQL_DATABASE: gateway
     volumes:
       - datos-gateway:/var/lib/mysql
-    healthcheck: *mysql-healthcheck
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
+      interval: 5s
+      retries: 30
 
-  # ---------- Catálogo (Express + MySQL) ----------
+  # Catálogo (Express + MySQL)
   catalogo:
     build:
-      context: ..   # la raíz del repo, para copiar el contrato OpenAPI
+      context: ..
       dockerfile: app/catalogo/Dockerfile
     environment:
       DB_HOST: catalogo-db
@@ -68,16 +63,19 @@ services:
     volumes:
       - datos-catalogo:/var/lib/mysql
       - ./catalogo/db/init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck: *mysql-healthcheck
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
+      interval: 5s
+      retries: 30
 
-  # ---------- RabbitMQ (eventos entre servicios) ----------
+  # RabbitMQ (eventos entre servicios)
   rabbitmq:
     image: rabbitmq:3-management
     ports:
-      - "15672:15672"   # panel web para ver colas y mensajes (usuario guest / guest)
+      - "15672:15672"   # panel web: guest / guest
 
-  # Para agregar un servicio nuevo (inventario, compras...), copiar el bloque de catalogo
-  # y catalogo-db, cambiar los nombres y agregar su volumen abajo.
+  # Para agregar un servicio nuevo, copiar el bloque de catalogo y catalogo-db,
+  # cambiar los nombres y agregar su volumen abajo.
 
 volumes:
   datos-gateway:
