@@ -10,6 +10,8 @@ $servicios = 'catalogo|inventario|compras|notificaciones|reportes';
 
 Route::get('/health', fn () => ['estado' => 'ok']);
 Route::post('/auth/login', [AutenticacionController::class, 'login']);
+Route::post('/auth/recuperar', [AutenticacionController::class, 'recuperar']);
+Route::post('/auth/restablecer', [AutenticacionController::class, 'restablecer']);
 
 // Documentación (Swagger) del gateway
 Route::get('/docs', fn () => view('docs'));
