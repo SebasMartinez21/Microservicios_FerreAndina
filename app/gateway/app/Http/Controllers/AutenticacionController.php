@@ -19,7 +19,7 @@ class AutenticacionController extends Controller
 
         $usuario = Usuario::where('correo', $request->email)->first();
 
-        if (!$usuario || !Hash::check($request->password, $usuario->contrasena)) {
+        if (!$usuario || !Hash::check($request->password, $usuario->contrasena_hash)) {
             return response()->json(['codigo' => 'CREDENCIALES_INVALIDAS', 'mensaje' => 'Correo o contraseña incorrectos'], 401);
         }
 
@@ -51,7 +51,13 @@ class AutenticacionController extends Controller
     {
         // Guarda el jti del token actual, así ya no sirve para más peticiones
         $datosToken = $request->attributes->get('jwt');
-        TokenRevocado::firstOrCreate(['jti' => $datosToken->jti], ['expira_en' => date('Y-m-d H:i:s', $datosToken->exp)]);
+        TokenRevocado::firstOrCreate(
+            ['jti' => $datosToken->jti],
+            [
+                'usuario_id' => $request->user()->id,
+                'expira_en' => date('Y-m-d H:i:s', $datosToken->exp),
+            ]
+        );
 
         return response()->noContent();
     }
@@ -94,7 +100,7 @@ class AutenticacionController extends Controller
         ]);
 
         $recuperacion = TokenRecuperacion::where('token_hash', hash('sha256', $request->token))
-            ->whereNull('usado_en')
+            ->where('usado', false)
             ->where('expira_en', '>', now())
             ->first();
 
@@ -102,8 +108,8 @@ class AutenticacionController extends Controller
             return response()->json(['codigo' => 'TOKEN_INVALIDO', 'mensaje' => 'El token no es válido, ya venció o ya se usó'], 400);
         }
 
-        $recuperacion->usuario->update(['contrasena' => $request->nuevaPassword]);
-        $recuperacion->update(['usado_en' => now()]);
+        $recuperacion->usuario->update(['contrasena_hash' => $request->nuevaPassword]);
+        $recuperacion->update(['usado' => true]);
 
         return response()->noContent();
     }
@@ -117,11 +123,11 @@ class AutenticacionController extends Controller
 
         $usuario = $request->user();
 
-        if (!Hash::check($request->passwordActual, $usuario->contrasena)) {
+        if (!Hash::check($request->passwordActual, $usuario->contrasena_hash)) {
             return response()->json(['codigo' => 'CREDENCIALES_INVALIDAS', 'mensaje' => 'La contraseña actual no es correcta'], 400);
         }
 
-        $usuario->update(['contrasena' => $request->nuevaPassword]);
+        $usuario->update(['contrasena_hash' => $request->nuevaPassword]);
 
         return response()->noContent();
     }

@@ -21,13 +21,13 @@ class DatabaseSeeder extends Seeder
 
         Usuario::firstOrCreate(['correo' => 'admin@ferreandina.com'], [
             'nombre' => 'Administrador',
-            'contrasena' => 'admin1234',
+            'contrasena_hash' => 'admin1234',
             'rol_id' => $admin->id,
         ]);
 
         Usuario::firstOrCreate(['correo' => 'operador@ferreandina.com'], [
             'nombre' => 'Operador Bodega',
-            'contrasena' => 'operador1234',
+            'contrasena_hash' => 'operador1234',
             'rol_id' => $operador->id,
         ]);
     }

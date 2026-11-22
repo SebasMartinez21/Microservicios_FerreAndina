@@ -10,20 +10,20 @@ class Usuario extends Authenticatable
     const CREATED_AT = 'creado_en';
     const UPDATED_AT = 'actualizado_en';
 
-    protected $fillable = ['nombre', 'correo', 'contrasena', 'rol_id', 'activo'];
+    protected $fillable = ['nombre', 'correo', 'contrasena_hash', 'rol_id', 'activo'];
 
     protected function casts(): array
     {
         return [
-            'contrasena' => 'hashed',   // Laravel la cifra sola al guardarla
+            'contrasena_hash' => 'hashed',   // Laravel la cifra sola al guardarla
             'activo' => 'boolean',
         ];
     }
 
-    // Laravel busca la contraseña en "password"; aquí la columna se llama "contrasena"
+    // Laravel busca la contraseña en "password"; aquí la columna se llama "contrasena_hash"
     public function getAuthPassword()
     {
-        return $this->contrasena;
+        return $this->contrasena_hash;
     }
 
     public function rol()

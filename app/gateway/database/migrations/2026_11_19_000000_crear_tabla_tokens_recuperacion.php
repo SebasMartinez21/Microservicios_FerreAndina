@@ -14,7 +14,7 @@ return new class extends Migration
             $table->foreignId('usuario_id')->constrained('usuarios');
             $table->char('token_hash', 64)->unique();   // se guarda cifrado, nunca el token original
             $table->timestamp('expira_en');
-            $table->timestamp('usado_en')->nullable();
+            $table->boolean('usado')->default(false);
         });
     }
 

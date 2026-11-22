@@ -28,7 +28,7 @@ class ValidarJwt
             throw new AuthenticationException();
         }
 
-        if (TokenRevocado::find($datosToken->jti)) {
+        if (TokenRevocado::where('jti', $datosToken->jti)->exists()) {
             throw new AuthenticationException();
         }
 

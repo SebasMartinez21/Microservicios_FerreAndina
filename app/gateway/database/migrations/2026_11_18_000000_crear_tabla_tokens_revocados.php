@@ -10,7 +10,9 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('tokens_revocados', function (Blueprint $table) {
-            $table->string('jti', 36)->primary();
+            $table->id();
+            $table->foreignId('usuario_id')->constrained('usuarios');
+            $table->string('jti', 36)->unique();
             $table->timestamp('expira_en');
         });
     }
