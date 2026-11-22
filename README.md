@@ -1,6 +1,6 @@
-# FerreAndina S.A.S. — Sistema de Gestión de Inventarios en Microservicios
+# FerreAndina S.A.S. ~ Sistema de Gestión de Inventarios en Microservicios
 
-Proyecto de aula de **Ingeniería de Software II** (Universidad Nacional de Colombia — Sede Manizales, 2026-2).
+Proyecto de Final de **Ingeniería de Software II** (Universidad Nacional de Colombia ~ Sede Manizales, 2026-2).
 Sistema de gestión de inventarios multi-bodega (Manizales, Pereira y Armenia) para la distribuidora mayorista de ferretería **FerreAndina S.A.S.**, diseñado bajo una arquitectura de microservicios con persistencia políglota e independiente por servicio, comunicación híbrida (REST síncrono y eventos asíncronos con RabbitMQ) y un **API Gateway propio** como único punto de entrada.
 
 ### Equipo de Desarrollo
