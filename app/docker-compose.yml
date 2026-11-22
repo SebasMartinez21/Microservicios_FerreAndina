@@ -102,7 +102,7 @@ services:
   compras:
     build:
       context: ..
-      dockerfile: app/compras/Dockerfile
+      dockerfile  : app/compras/Dockerfile
     environment:
       DB_HOST: compras-db
       DB_NAME: compras
@@ -129,17 +129,52 @@ services:
       interval: 5s
       retries: 30
 
+  # Notificaciones (Express + MongoDB)
+  notificaciones:
+    build:
+      context: ..
+      dockerfile: app/notificaciones/Dockerfile
+    environment:
+      MONGO_URL: mongodb://notificaciones-db:27017
+      DB_NAME: notificaciones
+      GATEWAY_TOKEN: token-interno-ferreandina
+      RABBIT_URL: amqp://rabbitmq
+    depends_on:
+      - notificaciones-db
+
+  notificaciones-db:
+    image: mongo:7
+    volumes:
+      - datos-notificaciones:/data/db
+
+  # Reportes (Express + MongoDB)
+  reportes:
+    build:
+      context: ..
+      dockerfile: app/reportes/Dockerfile
+    environment:
+      MONGO_URL: mongodb://reportes-db:27017
+      DB_NAME: reportes
+      GATEWAY_TOKEN: token-interno-ferreandina
+      RABBIT_URL: amqp://rabbitmq
+    depends_on:
+      - reportes-db
+
+  reportes-db:
+    image: mongo:7
+    volumes:
+      - datos-reportes:/data/db
+
   # RabbitMQ (eventos entre servicios)
   rabbitmq:
     image: rabbitmq:3-management
     ports:
       - "15672:15672"   # panel web: guest / guest
 
-  # Para agregar un servicio nuevo, copiar el bloque de catalogo y catalogo-db,
-  # cambiar los nombres y agregar su volumen abajo.
-
 volumes:
   datos-gateway:
   datos-catalogo:
   datos-inventario:
   datos-compras:
+  datos-notificaciones:
+  datos-reportes:
