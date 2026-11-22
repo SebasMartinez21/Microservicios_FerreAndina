@@ -1,0 +1,5 @@
+__pycache__
+.venv/
+resultados/*_failures.csv
+resultados/*_exceptions.csv
+resultados/*_stats_history.csv
