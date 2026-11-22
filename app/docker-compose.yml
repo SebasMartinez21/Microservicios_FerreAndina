@@ -98,6 +98,37 @@ services:
       interval: 5s
       retries: 30
 
+  # Compras (Express + MySQL)
+  compras:
+    build:
+      context: ..
+      dockerfile: app/compras/Dockerfile
+    environment:
+      DB_HOST: compras-db
+      DB_NAME: compras
+      DB_USER: root
+      DB_PASSWORD: root
+      GATEWAY_TOKEN: token-interno-ferreandina
+      RABBIT_URL: amqp://rabbitmq
+      CATALOGO_URL: http://catalogo:3000
+      INVENTARIO_URL: http://inventario:3000
+    depends_on:
+      compras-db:
+        condition: service_healthy
+
+  compras-db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: compras
+    volumes:
+      - datos-compras:/var/lib/mysql
+      - ./compras/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
+      interval: 5s
+      retries: 30
+
   # RabbitMQ (eventos entre servicios)
   rabbitmq:
     image: rabbitmq:3-management
@@ -111,3 +142,4 @@ volumes:
   datos-gateway:
   datos-catalogo:
   datos-inventario:
+  datos-compras:
