@@ -47,8 +47,11 @@ async function actualizar(req, res) {
     return conStock(res);
   }
 
+  // Si no se envía activa, la bodega conserva su estado actual
+  const activa = req.body.activa ?? actual.activa;
+
   try {
-    res.json(await Bodega.actualizar(actual.id, req.body));
+    res.json(await Bodega.actualizar(actual.id, { ...req.body, activa }));
   } catch (error) {
     if (error.code === "ER_DUP_ENTRY") return codigoDuplicado(res);
     throw error;

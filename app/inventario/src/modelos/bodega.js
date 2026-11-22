@@ -45,7 +45,7 @@ async function crear(datos) {
 async function actualizar(id, datos) {
   const [resultado] = await db.query(
     "UPDATE bodegas SET codigo = ?, nombre = ?, ciudad = ?, direccion = ?, activa = ? WHERE id = ?",
-    [datos.codigo, datos.nombre, datos.ciudad, datos.direccion || null, datos.activa !== false, id]
+    [datos.codigo, datos.nombre, datos.ciudad, datos.direccion || null, datos.activa, id]
   );
   return resultado.affectedRows ? buscar(id) : null;
 }
