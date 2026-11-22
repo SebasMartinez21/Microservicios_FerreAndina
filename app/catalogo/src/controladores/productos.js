@@ -57,6 +57,14 @@ async function crear(req, res) {
   const error = validar(req.body) || (!req.body.codigo && "El código es obligatorio");
   if (error) return invalido(res, error);
 
+  const proveedores = req.body.proveedores || [];
+  if (proveedores.filter((p) => p.esPrincipal).length > 1) {
+    return invalido(res, "Solo un proveedor puede ser el principal");
+  }
+  if (proveedores.length > 0 && !proveedores.some((p) => p.esPrincipal)) {
+    proveedores[0].esPrincipal = true;
+  }
+
   try {
     const producto = await Producto.crear(req.body);
     avisarCambio(producto);

@@ -8,7 +8,7 @@ CREATE TABLE categorias (
   nombre VARCHAR(100) NOT NULL,
   descripcion TEXT,
   padre_id INT NULL,
-  activa BOOLEAN NOT NULL DEFAULT TRUE,
+  activo BOOLEAN NOT NULL DEFAULT TRUE,
   UNIQUE (nombre, padre_id),
   FOREIGN KEY (padre_id) REFERENCES categorias(id)
 );

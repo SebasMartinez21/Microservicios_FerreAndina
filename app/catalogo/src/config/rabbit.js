@@ -35,6 +35,10 @@ async function escuchar(cola, clave, funcion) {
       await funcion(JSON.parse(mensaje.content.toString()));
       canal.ack(mensaje);
     } catch (error) {
+      // Si el evento llega repetido (índice único en MySQL o MongoDB), se ignora y se confirma
+      if (error.code === "ER_DUP_ENTRY" || error.code === 11000) {
+        return canal.ack(mensaje);
+      }
       console.log("Error procesando evento:", error.message);
       canal.nack(mensaje);
     }

@@ -24,6 +24,10 @@ async function consultar(req, res) {
 async function crear(req, res) {
   if (!req.body.nombre) return res.status(400).json({ codigo: "DATOS_INVALIDOS", mensaje: "El nombre es obligatorio" });
 
+  if (await Categoria.existeNombre(req.body.nombre, req.body.padreId)) {
+    return res.status(409).json({ codigo: "NOMBRE_DUPLICADO", mensaje: "Ya existe esa categoría" });
+  }
+
   try {
     res.status(201).json(await Categoria.crear(req.body));
   } catch (error) {
@@ -36,9 +40,19 @@ async function crear(req, res) {
 async function actualizar(req, res) {
   if (!req.body.nombre) return res.status(400).json({ codigo: "DATOS_INVALIDOS", mensaje: "El nombre es obligatorio" });
 
-  const categoria = await Categoria.actualizar(req.params.id, req.body);
-  if (!categoria) return noExiste(res);
-  res.json(categoria);
+  if (await Categoria.existeNombre(req.body.nombre, req.body.padreId, req.params.id)) {
+    return res.status(409).json({ codigo: "NOMBRE_DUPLICADO", mensaje: "Ya existe esa categoría" });
+  }
+
+  try {
+    const categoria = await Categoria.actualizar(req.params.id, req.body);
+    if (!categoria) return noExiste(res);
+    res.json(categoria);
+  } catch (error) {
+    if (error.code === "ER_DUP_ENTRY") return res.status(409).json({ codigo: "NOMBRE_DUPLICADO", mensaje: "Ya existe esa categoría" });
+    if (error.code === "ER_NO_REFERENCED_ROW_2") return res.status(400).json({ codigo: "DATOS_INVALIDOS", mensaje: "La categoría padre no existe" });
+    throw error;
+  }
 }
 
 // Baja lógica: no se borra, se marca como inactiva

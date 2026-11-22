@@ -19,7 +19,7 @@ return new class extends Migration
             $table->id();
             $table->string('nombre');
             $table->string('correo')->unique();
-            $table->string('contrasena');   // se guarda cifrada (hash), nunca en texto plano
+            $table->string('contrasena_hash');   // se guarda cifrada (hash), nunca en texto plano
             $table->foreignId('rol_id')->constrained('roles');
             $table->boolean('activo')->default(true);
             $table->timestamp('creado_en')->nullable();
