@@ -6,3 +6,5 @@ app/gateway/database/database.sqlite
 app/gateway/storage/logs/*
 app/gateway/bootstrap/cache/*.php
 docs/entrega-*
+pruebas-rendimiento
+README.md
